@@ -1,5 +1,5 @@
-/* EVMC: Ethereum Client-VM Connector API.
- * Copyright 2018-2019 The EVMC Authors.
+/* IVMC: Ethereum Client-VM Connector API.
+ * Copyright 2018-2019 The IVMC Authors.
  * Licensed under the Apache License, Version 2.0.
  */
 
@@ -14,23 +14,23 @@
  */
 
 /**
- * @def EVMC_EXPORT
+ * @def IVMC_EXPORT
  * Marks a function to be exported from a shared library.
  */
 #if defined _MSC_VER || defined __MINGW32__
-#define EVMC_EXPORT __declspec(dllexport)
+#define IVMC_EXPORT __declspec(dllexport)
 #else
-#define EVMC_EXPORT __attribute__((visibility("default")))
+#define IVMC_EXPORT __attribute__((visibility("default")))
 #endif
 
 /**
- * @def EVMC_NOEXCEPT
+ * @def IVMC_NOEXCEPT
  * Safe way of marking a function with `noexcept` C++ specifier.
  */
 #ifdef __cplusplus
-#define EVMC_NOEXCEPT noexcept
+#define IVMC_NOEXCEPT noexcept
 #else
-#define EVMC_NOEXCEPT
+#define IVMC_NOEXCEPT
 #endif
 
 /** @} */

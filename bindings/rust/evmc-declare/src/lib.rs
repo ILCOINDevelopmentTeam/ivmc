@@ -1,29 +1,29 @@
-/* EVMC: Ethereum Client-VM Connector API.
- * Copyright 2019 The EVMC Authors.
+/* IVMC: Ethereum Client-VM Connector API.
+ * Copyright 2019 The IVMC Authors.
  * Licensed under the Apache License, Version 2.0.
  */
 
-//! evmc-declare is an attribute-style procedural macro to be used for automatic generation of FFI
-//! code for the EVMC API with minimal boilerplate.
+//! ivmc-declare is an attribute-style procedural macro to be used for automatic generation of FFI
+//! code for the IVMC API with minimal boilerplate.
 //!
-//! evmc-declare can be used by applying its attribute to any struct which implements the `EvmcVm`
-//! trait, from the evmc-vm crate.
+//! ivmc-declare can be used by applying its attribute to any struct which implements the `EvmcVm`
+//! trait, from the ivmc-vm crate.
 //!
 //! The macro takes three arguments: a valid UTF-8 stylized VM name, a comma-separated list of
 //! capabilities, and a version string.
 //!
 //! # Example
 //! ```
-//! #[evmc_declare::evmc_declare_vm("This is an example VM name", "ewasm, evm", "1.2.3-custom")]
+//! #[ivmc_declare::ivmc_declare_vm("This is an example VM name", "ewasm, evm", "1.2.3-custom")]
 //! pub struct ExampleVM;
 //!
-//! impl evmc_vm::EvmcVm for ExampleVM {
+//! impl ivmc_vm::EvmcVm for ExampleVM {
 //!     fn init() -> Self {
 //!             ExampleVM {}
 //!     }
 //!
-//!     fn execute(&self, revision: evmc_vm::ffi::evmc_revision, code: &[u8], message: &evmc_vm::ExecutionMessage, context: Option<&mut evmc_vm::ExecutionContext>) -> evmc_vm::ExecutionResult {
-//!             evmc_vm::ExecutionResult::success(1337, None)
+//!     fn execute(&self, revision: ivmc_vm::ffi::ivmc_revision, code: &[u8], message: &ivmc_vm::ExecutionMessage, context: Option<&mut ivmc_vm::ExecutionContext>) -> ivmc_vm::ExecutionResult {
+//!             ivmc_vm::ExecutionResult::success(1337, None)
 //!     }
 //! }
 //! ```
@@ -87,7 +87,7 @@ impl VMNameSet {
     }
 
     /// Return a reference to the name in lowercase, with all underscores removed. (Used for
-    /// symbols like evmc_create_vmname)
+    /// symbols like ivmc_create_vmname)
     fn get_name_lowercase(&self) -> &String {
         &self.name_lowercase
     }
@@ -209,7 +209,7 @@ impl VMMetaData {
 }
 
 #[proc_macro_attribute]
-pub fn evmc_declare_vm(args: TokenStream, item: TokenStream) -> TokenStream {
+pub fn ivmc_declare_vm(args: TokenStream, item: TokenStream) -> TokenStream {
     // First, try to parse the input token stream into an AST node representing a struct
     // declaration.
     let input: ItemStruct = parse_macro_input!(item as ItemStruct);
@@ -243,7 +243,7 @@ pub fn evmc_declare_vm(args: TokenStream, item: TokenStream) -> TokenStream {
     quoted.into()
 }
 
-/// Generate tokens for the static data associated with an EVMC VM.
+/// Generate tokens for the static data associated with an IVMC VM.
 fn build_static_data(names: &VMNameSet, metadata: &VMMetaData) -> proc_macro2::TokenStream {
     // Stitch together the VM name and the suffix _NAME
     let static_name_ident = names.get_caps_as_ident_append("_NAME");
@@ -265,22 +265,22 @@ fn build_static_data(names: &VMNameSet, metadata: &VMMetaData) -> proc_macro2::T
     }
 }
 
-/// Takes a capabilities flag and builds the evmc_get_capabilities callback.
+/// Takes a capabilities flag and builds the ivmc_get_capabilities callback.
 fn build_capabilities_fn(capabilities: u32) -> proc_macro2::TokenStream {
     let capabilities_string = capabilities.to_string();
     let capabilities_literal = LitInt::new(&capabilities_string, capabilities.span());
 
     quote! {
-        extern "C" fn __evmc_get_capabilities(instance: *mut ::evmc_vm::ffi::evmc_vm) -> ::evmc_vm::ffi::evmc_capabilities_flagset {
+        extern "C" fn __ivmc_get_capabilities(instance: *mut ::ivmc_vm::ffi::ivmc_vm) -> ::ivmc_vm::ffi::ivmc_capabilities_flagset {
             #capabilities_literal
         }
     }
 }
 
-/// Takes an identifier and struct definition, builds an evmc_create_* function for FFI.
+/// Takes an identifier and struct definition, builds an ivmc_create_* function for FFI.
 fn build_create_fn(names: &VMNameSet) -> proc_macro2::TokenStream {
     let type_ident = names.get_type_as_ident();
-    let fn_ident = names.get_lowercase_as_ident_prepend("evmc_create_");
+    let fn_ident = names.get_lowercase_as_ident_prepend("ivmc_create_");
 
     let static_version_ident = names.get_caps_as_ident_append("_VERSION");
     let static_name_ident = names.get_caps_as_ident_append("_NAME");
@@ -288,22 +288,22 @@ fn build_create_fn(names: &VMNameSet) -> proc_macro2::TokenStream {
     // Note: we can get CStrs unchecked because we did the checks on instantiation of VMMetaData.
     quote! {
         #[no_mangle]
-        extern "C" fn #fn_ident() -> *const ::evmc_vm::ffi::evmc_vm {
-            let new_instance = ::evmc_vm::ffi::evmc_vm {
-                abi_version: ::evmc_vm::ffi::EVMC_ABI_VERSION as i32,
-                destroy: Some(__evmc_destroy),
-                execute: Some(__evmc_execute),
-                get_capabilities: Some(__evmc_get_capabilities),
+        extern "C" fn #fn_ident() -> *const ::ivmc_vm::ffi::ivmc_vm {
+            let new_instance = ::ivmc_vm::ffi::ivmc_vm {
+                abi_version: ::ivmc_vm::ffi::IVMC_ABI_VERSION as i32,
+                destroy: Some(__ivmc_destroy),
+                execute: Some(__ivmc_execute),
+                get_capabilities: Some(__ivmc_get_capabilities),
                 set_option: None,
                 name: unsafe { ::std::ffi::CStr::from_bytes_with_nul_unchecked(#static_name_ident.as_bytes()).as_ptr() as *const i8 },
                 version: unsafe { ::std::ffi::CStr::from_bytes_with_nul_unchecked(#static_version_ident.as_bytes()).as_ptr() as *const i8 },
             };
 
-            let container = ::evmc_vm::EvmcContainer::<#type_ident>::new(new_instance);
+            let container = ::ivmc_vm::EvmcContainer::<#type_ident>::new(new_instance);
 
             unsafe {
-                // Release ownership to EVMC.
-                ::evmc_vm::EvmcContainer::into_ffi_pointer(container)
+                // Release ownership to IVMC.
+                ::ivmc_vm::EvmcContainer::into_ffi_pointer(container)
             }
         }
     }
@@ -314,14 +314,14 @@ fn build_destroy_fn(names: &VMNameSet) -> proc_macro2::TokenStream {
     let type_ident = names.get_type_as_ident();
 
     quote! {
-        extern "C" fn __evmc_destroy(instance: *mut ::evmc_vm::ffi::evmc_vm) {
+        extern "C" fn __ivmc_destroy(instance: *mut ::ivmc_vm::ffi::ivmc_vm) {
             if instance.is_null() {
-                // This is an irrecoverable error that violates the EVMC spec.
+                // This is an irrecoverable error that violates the IVMC spec.
                 std::process::abort();
             }
             unsafe {
-                // Acquire ownership from EVMC. This will deallocate it also at the end of the scope.
-                ::evmc_vm::EvmcContainer::<#type_ident>::from_ffi_pointer(instance);
+                // Acquire ownership from IVMC. This will deallocate it also at the end of the scope.
+                ::ivmc_vm::EvmcContainer::<#type_ident>::from_ffi_pointer(instance);
             }
         }
     }
@@ -332,29 +332,29 @@ fn build_execute_fn(names: &VMNameSet) -> proc_macro2::TokenStream {
     let type_name_ident = names.get_type_as_ident();
 
     quote! {
-        extern "C" fn __evmc_execute(
-            instance: *mut ::evmc_vm::ffi::evmc_vm,
-            host: *const ::evmc_vm::ffi::evmc_host_interface,
-            context: *mut ::evmc_vm::ffi::evmc_host_context,
-            revision: ::evmc_vm::ffi::evmc_revision,
-            msg: *const ::evmc_vm::ffi::evmc_message,
+        extern "C" fn __ivmc_execute(
+            instance: *mut ::ivmc_vm::ffi::ivmc_vm,
+            host: *const ::ivmc_vm::ffi::ivmc_host_interface,
+            context: *mut ::ivmc_vm::ffi::ivmc_host_context,
+            revision: ::ivmc_vm::ffi::ivmc_revision,
+            msg: *const ::ivmc_vm::ffi::ivmc_message,
             code: *const u8,
             code_size: usize
-        ) -> ::evmc_vm::ffi::evmc_result
+        ) -> ::ivmc_vm::ffi::ivmc_result
         {
-            use evmc_vm::EvmcVm;
+            use ivmc_vm::EvmcVm;
 
             // TODO: context is optional in case of the "precompiles" capability
             if instance.is_null() || msg.is_null() || (code.is_null() && code_size != 0) {
-                // These are irrecoverable errors that violate the EVMC spec.
+                // These are irrecoverable errors that violate the IVMC spec.
                 std::process::abort();
             }
 
             assert!(!instance.is_null());
             assert!(!msg.is_null());
 
-            let execution_message: ::evmc_vm::ExecutionMessage = unsafe {
-                msg.as_ref().expect("EVMC message is null").into()
+            let execution_message: ::ivmc_vm::ExecutionMessage = unsafe {
+                msg.as_ref().expect("IVMC message is null").into()
             };
 
             let empty_code = [0u8;0];
@@ -368,8 +368,8 @@ fn build_execute_fn(names: &VMNameSet) -> proc_macro2::TokenStream {
             };
 
             let container = unsafe {
-                // Acquire ownership from EVMC.
-                ::evmc_vm::EvmcContainer::<#type_name_ident>::from_ffi_pointer(instance)
+                // Acquire ownership from IVMC.
+                ::ivmc_vm::EvmcContainer::<#type_name_ident>::from_ffi_pointer(instance)
             };
 
             let result = ::std::panic::catch_unwind(|| {
@@ -377,8 +377,8 @@ fn build_execute_fn(names: &VMNameSet) -> proc_macro2::TokenStream {
                     container.execute(revision, code_ref, &execution_message, None)
                 } else {
                     let mut execution_context = unsafe {
-                        ::evmc_vm::ExecutionContext::new(
-                            host.as_ref().expect("EVMC host is null"),
+                        ::ivmc_vm::ExecutionContext::new(
+                            host.as_ref().expect("IVMC host is null"),
                             context,
                         )
                     };
@@ -388,14 +388,14 @@ fn build_execute_fn(names: &VMNameSet) -> proc_macro2::TokenStream {
 
             let result = if result.is_err() {
                 // Consider a panic an internal error.
-                ::evmc_vm::ExecutionResult::new(::evmc_vm::ffi::evmc_status_code::EVMC_INTERNAL_ERROR, 0, None)
+                ::ivmc_vm::ExecutionResult::new(::ivmc_vm::ffi::ivmc_status_code::IVMC_INTERNAL_ERROR, 0, None)
             } else {
                 result.unwrap()
             };
 
             unsafe {
-                // Release ownership to EVMC.
-                ::evmc_vm::EvmcContainer::into_ffi_pointer(container);
+                // Release ownership to IVMC.
+                ::ivmc_vm::EvmcContainer::into_ffi_pointer(container);
             }
 
             result.into()

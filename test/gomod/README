@@ -1,9 +1,9 @@
-Integration test for EVMC Go module
+Integration test for IVMC Go module
 
 Usage:
 
-    go mod init evmc.ethereum.org/evmc_use
-    go get github.com/ethereum/evmc/v10@<commit-hash-to-be-tested>
+    go mod init ivmc.ethereum.org/ivmc_use
+    go get github.com/ethereum/ivmc/v10@<commit-hash-to-be-tested>
     go mod tidy
     gcc -shared -I../../include ../../examples/example_vm/example_vm.cpp -o example-vm.so
     go test

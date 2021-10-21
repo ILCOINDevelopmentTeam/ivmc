@@ -1,38 +1,38 @@
-// EVMC: Ethereum Client-VM Connector API.
-// Copyright 2018-2020 The EVMC Authors.
+// IVMC: Ethereum Client-VM Connector API.
+// Copyright 2018-2020 The IVMC Authors.
 // Licensed under the Apache License, Version 2.0.
 
-package evmc
+package ivmc
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../../include -Wall -Wextra
 #cgo !windows LDFLAGS: -ldl
 
-#include <evmc/evmc.h>
-#include <evmc/helpers.h>
-#include <evmc/loader.h>
+#include <ivmc/ivmc.h>
+#include <ivmc/helpers.h>
+#include <ivmc/loader.h>
 
 #include <stdlib.h>
 #include <string.h>
 
-static inline enum evmc_set_option_result set_option(struct evmc_vm* vm, char* name, char* value)
+static inline enum ivmc_set_option_result set_option(struct ivmc_vm* vm, char* name, char* value)
 {
-	enum evmc_set_option_result ret = evmc_set_option(vm, name, value);
+	enum ivmc_set_option_result ret = ivmc_set_option(vm, name, value);
 	free(name);
 	free(value);
 	return ret;
 }
 
-extern const struct evmc_host_interface evmc_go_host;
+extern const struct ivmc_host_interface ivmc_go_host;
 
-static struct evmc_result execute_wrapper(struct evmc_vm* vm,
-	uintptr_t context_index, enum evmc_revision rev,
-	enum evmc_call_kind kind, uint32_t flags, int32_t depth, int64_t gas,
-	const evmc_address* recipient, const evmc_address* sender,
-	const uint8_t* input_data, size_t input_size, const evmc_uint256be* value,
+static struct ivmc_result execute_wrapper(struct ivmc_vm* vm,
+	uintptr_t context_index, enum ivmc_revision rev,
+	enum ivmc_call_kind kind, uint32_t flags, int32_t depth, int64_t gas,
+	const ivmc_address* recipient, const ivmc_address* sender,
+	const uint8_t* input_data, size_t input_size, const ivmc_uint256be* value,
 	const uint8_t* code, size_t code_size)
 {
-	struct evmc_message msg = {
+	struct ivmc_message msg = {
 		kind,
 		flags,
 		depth,
@@ -46,8 +46,8 @@ static struct evmc_result execute_wrapper(struct evmc_vm* vm,
 		{{0}}, // code_address: not required for execution
 	};
 
-	struct evmc_host_context* context = (struct evmc_host_context*)context_index;
-	return evmc_execute(vm, &evmc_go_host, context, rev, &msg, code, code_size);
+	struct ivmc_host_context* context = (struct ivmc_host_context*)context_index;
+	return ivmc_execute(vm, &ivmc_go_host, context, rev, &msg, code, code_size);
 }
 */
 import "C"
@@ -68,13 +68,13 @@ type Address [20]byte
 
 // Static asserts.
 const (
-	// The size of evmc_bytes32 equals the size of Hash.
-	_ = uint(len(Hash{}) - C.sizeof_evmc_bytes32)
-	_ = uint(C.sizeof_evmc_bytes32 - len(Hash{}))
+	// The size of ivmc_bytes32 equals the size of Hash.
+	_ = uint(len(Hash{}) - C.sizeof_ivmc_bytes32)
+	_ = uint(C.sizeof_ivmc_bytes32 - len(Hash{}))
 
-	// The size of evmc_address equals the size of Address.
-	_ = uint(len(Address{}) - C.sizeof_evmc_address)
-	_ = uint(C.sizeof_evmc_address - len(Address{}))
+	// The size of ivmc_address equals the size of Address.
+	_ = uint(len(Address{}) - C.sizeof_ivmc_address)
+	_ = uint(C.sizeof_ivmc_address - len(Address{}))
 )
 
 type Error int32
@@ -84,50 +84,50 @@ func (err Error) IsInternalError() bool {
 }
 
 func (err Error) Error() string {
-	return C.GoString(C.evmc_status_code_to_string(C.enum_evmc_status_code(err)))
+	return C.GoString(C.ivmc_status_code_to_string(C.enum_ivmc_status_code(err)))
 }
 
 const (
-	Failure = Error(C.EVMC_FAILURE)
-	Revert  = Error(C.EVMC_REVERT)
+	Failure = Error(C.IVMC_FAILURE)
+	Revert  = Error(C.IVMC_REVERT)
 )
 
 type Revision int32
 
 const (
-	Frontier             Revision = C.EVMC_FRONTIER
-	Homestead            Revision = C.EVMC_HOMESTEAD
-	TangerineWhistle     Revision = C.EVMC_TANGERINE_WHISTLE
-	SpuriousDragon       Revision = C.EVMC_SPURIOUS_DRAGON
-	Byzantium            Revision = C.EVMC_BYZANTIUM
-	Constantinople       Revision = C.EVMC_CONSTANTINOPLE
-	Petersburg           Revision = C.EVMC_PETERSBURG
-	Istanbul             Revision = C.EVMC_ISTANBUL
-	Berlin               Revision = C.EVMC_BERLIN
-	London               Revision = C.EVMC_LONDON
-	Shanghai             Revision = C.EVMC_SHANGHAI
-	MaxRevision          Revision = C.EVMC_MAX_REVISION
-	LatestStableRevision Revision = C.EVMC_LATEST_STABLE_REVISION
+	Frontier             Revision = C.IVMC_FRONTIER
+	Homestead            Revision = C.IVMC_HOMESTEAD
+	TangerineWhistle     Revision = C.IVMC_TANGERINE_WHISTLE
+	SpuriousDragon       Revision = C.IVMC_SPURIOUS_DRAGON
+	Byzantium            Revision = C.IVMC_BYZANTIUM
+	Constantinople       Revision = C.IVMC_CONSTANTINOPLE
+	Petersburg           Revision = C.IVMC_PETERSBURG
+	Istanbul             Revision = C.IVMC_ISTANBUL
+	Berlin               Revision = C.IVMC_BERLIN
+	London               Revision = C.IVMC_LONDON
+	Shanghai             Revision = C.IVMC_SHANGHAI
+	MaxRevision          Revision = C.IVMC_MAX_REVISION
+	LatestStableRevision Revision = C.IVMC_LATEST_STABLE_REVISION
 )
 
 type VM struct {
-	handle *C.struct_evmc_vm
+	handle *C.struct_ivmc_vm
 }
 
 func Load(filename string) (vm *VM, err error) {
 	cfilename := C.CString(filename)
-	var loaderErr C.enum_evmc_loader_error_code
-	handle := C.evmc_load_and_create(cfilename, &loaderErr)
+	var loaderErr C.enum_ivmc_loader_error_code
+	handle := C.ivmc_load_and_create(cfilename, &loaderErr)
 	C.free(unsafe.Pointer(cfilename))
 
-	if loaderErr == C.EVMC_LOADER_SUCCESS {
+	if loaderErr == C.IVMC_LOADER_SUCCESS {
 		vm = &VM{handle}
 	} else {
-		errMsg := C.evmc_last_error_msg()
+		errMsg := C.ivmc_last_error_msg()
 		if errMsg != nil {
-			err = fmt.Errorf("EVMC loading error: %s", C.GoString(errMsg))
+			err = fmt.Errorf("IVMC loading error: %s", C.GoString(errMsg))
 		} else {
-			err = fmt.Errorf("EVMC loading error %d", int(loaderErr))
+			err = fmt.Errorf("IVMC loading error %d", int(loaderErr))
 		}
 	}
 
@@ -136,18 +136,18 @@ func Load(filename string) (vm *VM, err error) {
 
 func LoadAndConfigure(config string) (vm *VM, err error) {
 	cconfig := C.CString(config)
-	var loaderErr C.enum_evmc_loader_error_code
-	handle := C.evmc_load_and_configure(cconfig, &loaderErr)
+	var loaderErr C.enum_ivmc_loader_error_code
+	handle := C.ivmc_load_and_configure(cconfig, &loaderErr)
 	C.free(unsafe.Pointer(cconfig))
 
-	if loaderErr == C.EVMC_LOADER_SUCCESS {
+	if loaderErr == C.IVMC_LOADER_SUCCESS {
 		vm = &VM{handle}
 	} else {
-		errMsg := C.evmc_last_error_msg()
+		errMsg := C.ivmc_last_error_msg()
 		if errMsg != nil {
-			err = fmt.Errorf("EVMC loading error: %s", C.GoString(errMsg))
+			err = fmt.Errorf("IVMC loading error: %s", C.GoString(errMsg))
 		} else {
-			err = fmt.Errorf("EVMC loading error %d", int(loaderErr))
+			err = fmt.Errorf("IVMC loading error %d", int(loaderErr))
 		}
 	}
 
@@ -155,39 +155,39 @@ func LoadAndConfigure(config string) (vm *VM, err error) {
 }
 
 func (vm *VM) Destroy() {
-	C.evmc_destroy(vm.handle)
+	C.ivmc_destroy(vm.handle)
 }
 
 func (vm *VM) Name() string {
-	// TODO: consider using C.evmc_vm_name(vm.handle)
+	// TODO: consider using C.ivmc_vm_name(vm.handle)
 	return C.GoString(vm.handle.name)
 }
 
 func (vm *VM) Version() string {
-	// TODO: consider using C.evmc_vm_version(vm.handle)
+	// TODO: consider using C.ivmc_vm_version(vm.handle)
 	return C.GoString(vm.handle.version)
 }
 
 type Capability uint32
 
 const (
-	CapabilityEVM1  Capability = C.EVMC_CAPABILITY_EVM1
-	CapabilityEWASM Capability = C.EVMC_CAPABILITY_EWASM
+	CapabilityEVM1  Capability = C.IVMC_CAPABILITY_EVM1
+	CapabilityEWASM Capability = C.IVMC_CAPABILITY_EWASM
 )
 
 func (vm *VM) HasCapability(capability Capability) bool {
-	return bool(C.evmc_vm_has_capability(vm.handle, uint32(capability)))
+	return bool(C.ivmc_vm_has_capability(vm.handle, uint32(capability)))
 }
 
 func (vm *VM) SetOption(name string, value string) (err error) {
 
 	r := C.set_option(vm.handle, C.CString(name), C.CString(value))
 	switch r {
-	case C.EVMC_SET_OPTION_INVALID_NAME:
-		err = fmt.Errorf("evmc: option '%s' not accepted", name)
-	case C.EVMC_SET_OPTION_INVALID_VALUE:
-		err = fmt.Errorf("evmc: option '%s' has invalid value", name)
-	case C.EVMC_SET_OPTION_SUCCESS:
+	case C.IVMC_SET_OPTION_INVALID_NAME:
+		err = fmt.Errorf("ivmc: option '%s' not accepted", name)
+	case C.IVMC_SET_OPTION_INVALID_VALUE:
+		err = fmt.Errorf("ivmc: option '%s' has invalid value", name)
+	case C.IVMC_SET_OPTION_SUCCESS:
 	}
 	return err
 }
@@ -199,28 +199,28 @@ func (vm *VM) Execute(ctx HostContext, rev Revision,
 
 	flags := C.uint32_t(0)
 	if static {
-		flags |= C.EVMC_STATIC
+		flags |= C.IVMC_STATIC
 	}
 
 	ctxId := addHostContext(ctx)
 	// FIXME: Clarify passing by pointer vs passing by value.
-	evmcRecipient := evmcAddress(recipient)
-	evmcSender := evmcAddress(sender)
-	evmcValue := evmcBytes32(value)
+	ivmcRecipient := ivmcAddress(recipient)
+	ivmcSender := ivmcAddress(sender)
+	ivmcValue := ivmcBytes32(value)
 	result := C.execute_wrapper(vm.handle, C.uintptr_t(ctxId), uint32(rev),
-		C.enum_evmc_call_kind(kind), flags, C.int32_t(depth), C.int64_t(gas),
-		&evmcRecipient, &evmcSender, bytesPtr(input), C.size_t(len(input)), &evmcValue,
+		C.enum_ivmc_call_kind(kind), flags, C.int32_t(depth), C.int64_t(gas),
+		&ivmcRecipient, &ivmcSender, bytesPtr(input), C.size_t(len(input)), &ivmcValue,
 		bytesPtr(code), C.size_t(len(code)))
 	removeHostContext(ctxId)
 
 	output = C.GoBytes(unsafe.Pointer(result.output_data), C.int(result.output_size))
 	gasLeft = int64(result.gas_left)
-	if result.status_code != C.EVMC_SUCCESS {
+	if result.status_code != C.IVMC_SUCCESS {
 		err = Error(result.status_code)
 	}
 
 	if result.release != nil {
-		C.evmc_release_result(&result)
+		C.ivmc_release_result(&result)
 	}
 
 	return output, gasLeft, err
@@ -254,16 +254,16 @@ func getHostContext(idx uintptr) HostContext {
 	return ctx
 }
 
-func evmcBytes32(in Hash) C.evmc_bytes32 {
-	out := C.evmc_bytes32{}
+func ivmcBytes32(in Hash) C.ivmc_bytes32 {
+	out := C.ivmc_bytes32{}
 	for i := 0; i < len(in); i++ {
 		out.bytes[i] = C.uint8_t(in[i])
 	}
 	return out
 }
 
-func evmcAddress(address Address) C.evmc_address {
-	r := C.evmc_address{}
+func ivmcAddress(address Address) C.ivmc_address {
+	r := C.ivmc_address{}
 	for i := 0; i < len(address); i++ {
 		r.bytes[i] = C.uint8_t(address[i])
 	}

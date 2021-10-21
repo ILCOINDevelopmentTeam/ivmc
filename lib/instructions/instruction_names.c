@@ -1,9 +1,9 @@
-/* EVMC: Ethereum Client-VM Connector API.
- * Copyright 2018-2019 The EVMC Authors.
+/* IVMC: Ethereum Client-VM Connector API.
+ * Copyright 2018-2019 The IVMC Authors.
  * Licensed under the Apache License, Version 2.0.
  */
 
-#include <evmc/instructions.h>
+#include <ivmc/instructions.h>
 
 static const char* london_names[256] = {
     /* 0x00 */ "STOP",
@@ -1559,26 +1559,26 @@ static const char* frontier_names[256] = {
     /* 0xff */ "SELFDESTRUCT",
 };
 
-const char* const* evmc_get_instruction_names_table(enum evmc_revision revision)
+const char* const* ivmc_get_instruction_names_table(enum ivmc_revision revision)
 {
     switch (revision)
     {
-    case EVMC_SHANGHAI:
-    case EVMC_LONDON:
+    case IVMC_SHANGHAI:
+    case IVMC_LONDON:
         return london_names;
-    case EVMC_BERLIN:
-    case EVMC_ISTANBUL:
+    case IVMC_BERLIN:
+    case IVMC_ISTANBUL:
         return istanbul_names;
-    case EVMC_PETERSBURG:
-    case EVMC_CONSTANTINOPLE:
+    case IVMC_PETERSBURG:
+    case IVMC_CONSTANTINOPLE:
         return constantinople_names;
-    case EVMC_BYZANTIUM:
+    case IVMC_BYZANTIUM:
         return byzantium_names;
-    case EVMC_SPURIOUS_DRAGON:
-    case EVMC_TANGERINE_WHISTLE:
-    case EVMC_HOMESTEAD:
+    case IVMC_SPURIOUS_DRAGON:
+    case IVMC_TANGERINE_WHISTLE:
+    case IVMC_HOMESTEAD:
         return homestead_names;
-    case EVMC_FRONTIER:
+    case IVMC_FRONTIER:
         return frontier_names;
     }
     return NULL;

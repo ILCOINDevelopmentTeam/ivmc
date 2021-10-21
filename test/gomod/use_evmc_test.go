@@ -1,14 +1,14 @@
-package evmc_use
+package ivmc_use
 
 import (
-	"github.com/ethereum/evmc/v10/bindings/go/evmc"
+	"github.com/ethereum/ivmc/v10/bindings/go/ivmc"
 	"testing"
 )
 
 var exampleVmPath = "./example-vm.so"
 
 func TestGetVmName(t *testing.T) {
-	vm, err := evmc.Load(exampleVmPath)
+	vm, err := ivmc.Load(exampleVmPath)
 	if err != nil {
 		t.Fatalf("%v", err)
 	}

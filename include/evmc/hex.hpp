@@ -1,5 +1,5 @@
-// EVMC: Ethereum Client-VM Connector API.
-// Copyright 2021 The EVMC Authors.
+// IVMC: Ethereum Client-VM Connector API.
+// Copyright 2021 The IVMC Authors.
 // Licensed under the Apache License, Version 2.0.
 #pragma once
 
@@ -9,7 +9,7 @@
 #include <string_view>
 #include <system_error>
 
-namespace evmc
+namespace ivmc
 {
 /// String of uint8_t chars.
 using bytes = std::basic_string<uint8_t>;
@@ -59,13 +59,13 @@ bytes from_hex(std::string_view hex);
 
 /// Encodes bytes as hex string.
 std::string hex(bytes_view bs);
-}  // namespace evmc
+}  // namespace ivmc
 
 namespace std
 {
-/// Template specialization of std::is_error_code_enum for evmc::hex_errc.
-/// This enabled implicit conversions from evmc::hex_errc to std::error_code.
+/// Template specialization of std::is_error_code_enum for ivmc::hex_errc.
+/// This enabled implicit conversions from ivmc::hex_errc to std::error_code.
 template <>
-struct is_error_code_enum<evmc::hex_errc> : true_type
+struct is_error_code_enum<ivmc::hex_errc> : true_type
 {};
 }  // namespace std

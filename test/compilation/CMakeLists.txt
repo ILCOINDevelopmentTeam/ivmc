@@ -1,5 +1,5 @@
-# EVMC: Ethereum Client-VM Connector API.
-# Copyright 2018-2020 The EVMC Authors.
+# IVMC: Ethereum Client-VM Connector API.
+# Copyright 2018-2020 The IVMC Authors.
 # Licensed under the Apache License, Version 2.0.
 
 # This CMake script creates multiple additional targets to test the compilation of public headers
@@ -25,7 +25,7 @@ macro(create_compilation_test STANDARD)
         set(target test-compile-${STANDARD})
         add_library(${target} OBJECT compilation_test.${lang})
         target_compile_features(${target} PRIVATE ${STANDARD})
-        target_include_directories(${target} PRIVATE ${EVMC_INCLUDE_DIR})
+        target_include_directories(${target} PRIVATE ${IVMC_INCLUDE_DIR})
     else()
         message(STATUS "Compilation test SKIPPED: ${STANDARD}")
     endif()

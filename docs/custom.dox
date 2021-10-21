@@ -1,15 +1,15 @@
 /**
- * @defgroup cpp EVMC C++
- * @copydoc evmc
+ * @defgroup cpp IVMC C++
+ * @copydoc ivmc
  */
 
 /**
- * @file evmc.h
- * @copydoc EVMC
+ * @file ivmc.h
+ * @copydoc IVMC
  */
 
 /**
- * @file evmc.hpp
+ * @file ivmc.hpp
  * @copydoc cpp
  */
 

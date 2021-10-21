@@ -1,5 +1,5 @@
-# EVMC: Ethereum Client-VM Connector API.
-# Copyright 2016-2020 The EVMC Authors.
+# IVMC: Ethereum Client-VM Connector API.
+# Copyright 2016-2020 The IVMC Authors.
 # Licensed under the Apache License, Version 2.0.
 
 cmake_minimum_required(VERSION 3.10)
@@ -8,8 +8,8 @@ if(POLICY CMP0074)
     cmake_policy(SET CMP0074 NEW)
 endif()
 
-if(TARGET evmc)
-    # The evmc library has been already created (probably by other submodule).
+if(TARGET ivmc)
+    # The ivmc library has been already created (probably by other submodule).
     return()
 endif()
 
@@ -20,19 +20,19 @@ include(CablePackage)
 include(CMakeDependentOption)
 include(CMakePackageConfigHelpers)
 
-option(EVMC_JAVA "Enable building Java Native Interface (JNI) bindings" OFF)
+option(IVMC_JAVA "Enable building Java Native Interface (JNI) bindings" OFF)
 
-option(EVMC_INSTALL "Enable EVMC installation (e.g. make install)" ON)
+option(IVMC_INSTALL "Enable IVMC installation (e.g. make install)" ON)
 
-option(EVMC_TESTING "Build everything (libraries, tools, examples, internal tests)" OFF)
+option(IVMC_TESTING "Build everything (libraries, tools, examples, internal tests)" OFF)
 
-cmake_dependent_option(EVMC_TOOLS "Build EVMC tools" OFF
-    "NOT EVMC_TESTING" ON)
+cmake_dependent_option(IVMC_TOOLS "Build IVMC tools" OFF
+    "NOT IVMC_TESTING" ON)
 
-cmake_dependent_option(EVMC_EXAMPLES "Build EVMC examples" OFF
-    "NOT EVMC_TESTING" ON)
+cmake_dependent_option(IVMC_EXAMPLES "Build IVMC examples" OFF
+    "NOT IVMC_TESTING" ON)
 
-option(HUNTER_ENABLED "Enable Hunter package manager support" ${EVMC_TOOLS})
+option(HUNTER_ENABLED "Enable Hunter package manager support" ${IVMC_TOOLS})
 
 if(HUNTER_ENABLED)
     set(HUNTER_CONFIGURATION_TYPES Release CACHE STRING "Build type of Hunter packages")
@@ -43,7 +43,7 @@ endif()
 
 cable_set_build_type(DEFAULT Release CONFIGURATION_TYPES Debug Release)
 
-project(evmc)
+project(ivmc)
 set(PROJECT_VERSION 10.0.0-alpha.1)
 
 include(GNUInstallDirs)  # Must be included after any language is enabled.
@@ -73,49 +73,49 @@ elseif(CABLE_COMPILER_GNU)
     set(CMAKE_CXX_FLAGS_COVERAGE "--coverage")
 endif()
 
-set(EVMC_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/include)
+set(IVMC_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/include)
 
 add_subdirectory(lib)
 
-if(EVMC_JAVA)
+if(IVMC_JAVA)
     add_subdirectory(bindings/java)
 endif()
 
-if(EVMC_TOOLS)
+if(IVMC_TOOLS)
     add_subdirectory(tools)
 endif()
 
-if(EVMC_EXAMPLES)
+if(IVMC_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
-if(EVMC_TESTING)
+if(IVMC_TESTING)
     enable_testing()
     add_subdirectory(test)
 endif()
 
-write_basic_package_version_file(evmcConfigVersion.cmake COMPATIBILITY ExactVersion)
+write_basic_package_version_file(ivmcConfigVersion.cmake COMPATIBILITY ExactVersion)
 
 configure_package_config_file(
     cmake/Config.cmake.in
-    evmcConfig.cmake
-    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/evmc
+    ivmcConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ivmc
 )
 
-if(EVMC_INSTALL)
-    install(DIRECTORY include/evmc DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+if(IVMC_INSTALL)
+    install(DIRECTORY include/ivmc DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
     install(
-        EXPORT evmcTargets
-        NAMESPACE evmc::
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/evmc
+        EXPORT ivmcTargets
+        NAMESPACE ivmc::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ivmc
     )
     install(
         FILES
-        ${CMAKE_CURRENT_BINARY_DIR}/evmcConfig.cmake
-        ${CMAKE_CURRENT_BINARY_DIR}/evmcConfigVersion.cmake
-        cmake/EVMC.cmake
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/evmc
+        ${CMAKE_CURRENT_BINARY_DIR}/ivmcConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/ivmcConfigVersion.cmake
+        cmake/IVMC.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ivmc
     )
 endif()
 

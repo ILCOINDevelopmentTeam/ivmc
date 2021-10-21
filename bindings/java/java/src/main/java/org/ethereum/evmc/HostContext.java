@@ -1,7 +1,7 @@
-// EVMC: Ethereum Client-VM Connector API.
-// Copyright 2019-2020 The EVMC Authors.
+// IVMC: Ethereum Client-VM Connector API.
+// Copyright 2019-2020 The IVMC Authors.
 // Licensed under the Apache License, Version 2.0.
-package org.ethereum.evmc;
+package org.ethereum.ivmc;
 
 import java.nio.ByteBuffer;
 
@@ -62,7 +62,7 @@ public interface HostContext {
    * <p>This function is used by a VM to update the given account storage entry. The VM MUST make
    * sure that the account exists. This requirement is only a formality because VM implementations
    * only modify storage of the account of the current execution context (i.e. referenced by
-   * evmc_message::recipient).
+   * ivmc_message::recipient).
    *
    * @param address The address of the account.
    * @param key The index of the storage entry.

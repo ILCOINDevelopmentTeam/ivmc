@@ -1,6 +1,6 @@
 #!/usr/bin/env -S cmake -P
 
-# Cable: CMake Bootstrap Library <https://github.com/ethereum/cable>
+# Cable: CMake Bootstrap Library <https://github.com/ILCOINDevelopmentTeam/cable>
 # Copyright 2019-2020 Pawel Bylica.
 # Licensed under the Apache License, Version 2.0.
 
@@ -21,7 +21,7 @@ if(NOT CMAKE_SCRIPT_MODE_FILE)
     return()
 endif()
 
-set(repo_url https://github.com/ethereum/cable)
+set(repo_url https://github.com/ILCOINDevelopmentTeam/cable)
 set(download_url ${repo_url}/raw/master)
 set(cable_dir ${CMAKE_CURRENT_LIST_DIR})
 

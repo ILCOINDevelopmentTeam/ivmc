@@ -1,18 +1,18 @@
-# EVMC: Ethereum Client-VM Connector API.
-# Copyright 2021 The EVMC Authors.
+# IVMC: Ethereum Client-VM Connector API.
+# Copyright 2021 The IVMC Authors.
 # Licensed under the Apache License, Version 2.0.
 
 add_library(tooling STATIC)
-add_library(evmc::tooling ALIAS tooling)
+add_library(ivmc::tooling ALIAS tooling)
 target_compile_features(tooling PUBLIC cxx_std_17)
-target_link_libraries(tooling PUBLIC evmc::evmc_cpp evmc::mocked_host evmc::hex)
+target_link_libraries(tooling PUBLIC ivmc::ivmc_cpp ivmc::mocked_host ivmc::hex)
 
 target_sources(
     tooling PRIVATE
-    ${EVMC_INCLUDE_DIR}/evmc/tooling.hpp
+    ${IVMC_INCLUDE_DIR}/ivmc/tooling.hpp
     run.cpp
 )
 
-if(EVMC_INSTALL)
-    install(TARGETS tooling EXPORT evmcTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+if(IVMC_INSTALL)
+    install(TARGETS tooling EXPORT ivmcTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 endif()

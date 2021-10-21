@@ -4,7 +4,7 @@
 # Project related configuration options
 #---------------------------------------------------------------------------
 DOXYFILE_ENCODING      = UTF-8
-PROJECT_NAME           = "EVMC"
+PROJECT_NAME           = "IVMC"
 PROJECT_NUMBER         =
 PROJECT_BRIEF          =
 PROJECT_LOGO           =
@@ -99,7 +99,7 @@ WARN_LOGFILE           =
 # Configuration options related to the input files
 #---------------------------------------------------------------------------
 INPUT                  = \
-    include/evmc/ \
+    include/ivmc/ \
     docs/ \
     examples/example_vm/example_vm.cpp
 INPUT_ENCODING         = UTF-8
@@ -265,7 +265,7 @@ EXPAND_ONLY_PREDEF     = NO
 SEARCH_INCLUDES        = YES
 INCLUDE_PATH           =
 INCLUDE_FILE_PATTERNS  =
-PREDEFINED             = EVMC_DOCUMENTATION=1
+PREDEFINED             = IVMC_DOCUMENTATION=1
 EXPAND_AS_DEFINED      =
 SKIP_FUNCTION_MACROS   = YES
 #---------------------------------------------------------------------------

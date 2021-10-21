@@ -1,11 +1,11 @@
-# EVMC
+# IVMC
 
 [![chat: on gitter][gitter badge]][Gitter]
 [![readme style: standard][readme style standard badge]][standard readme]
 
 > Ethereum Client-VM Connector API
 
-The EVMC is the low-level ABI between Ethereum Virtual Machines (EVMs) and
+The IVMC is the low-level ABI between Ethereum Virtual Machines (EVMs) and
 Ethereum Clients. On the EVM side it supports classic EVM1 and [ewasm].
 On the Client-side it defines the interface for EVM implementations
 to access Ethereum environment and state.
@@ -32,10 +32,10 @@ Please visit the [documentation].
 
 ### Testing tools
 
-* **evmc run** ([tools/evmc]) — executes bytecode in any EVMC-compatible VM implementation.
-* **evmc-vmtester** ([tools/vmtester]) — can test any EVM implementation for compatibility with EVMC.
-* **evm-test** ([evmone → test/unittests]) — allows running the collection of [evmone]'s unit tests on any EVMC-compatible EVM implementation.
-* **evmone-fuzzer** ([evmone → test/fuzzer]) — differential fuzzer for EVMC-compatible EVM implementations. 
+* **ivmc run** ([tools/ivmc]) — executes bytecode in any IVMC-compatible VM implementation.
+* **ivmc-vmtester** ([tools/vmtester]) — can test any EVM implementation for compatibility with IVMC.
+* **evm-test** ([evmone → test/unittests]) — allows running the collection of [evmone]'s unit tests on any IVMC-compatible EVM implementation.
+* **evmone-fuzzer** ([evmone → test/fuzzer]) — differential fuzzer for IVMC-compatible EVM implementations. 
 
 
 ## Related projects
@@ -44,20 +44,20 @@ Please visit the [documentation].
 
 - [aleth-interpreter]
 - [Daytona]
-- [eip1962-evmc] (EIP-2003 style precompile)
+- [eip1962-ivmc] (EIP-2003 style precompile)
 - [evmjit]
 - [evmone]
 - [Hera]
 - [Hera.rs]
-- [ssvm-evmc]
+- [ssvm-ivmc]
 
 ### Clients
 
 - [aleth]
 - [core-geth] (in progress)
-- [evmc-js]
+- [ivmc-js]
 - [go-ethereum] (in progress)
-- [nim-evmc]
+- [nim-ivmc]
 - [pyevm] (in progress)
 - [pyethereum] (abandoned)
 - [rust-ssvm] (Rust Host-side)
@@ -70,13 +70,13 @@ Please visit the [documentation].
 - Alex Beregszaszi [@axic]
 - Paweł Bylica [@chfast]
 
-See also the list of [EVMC Authors](AUTHORS.md).
+See also the list of [IVMC Authors](AUTHORS.md).
 
 ## Contributing
 
 [![chat: on gitter][gitter badge]][Gitter]
 
-Talk with us on the [EVMC Gitter chat][Gitter].
+Talk with us on the [IVMC Gitter chat][Gitter].
 
 ## License
 
@@ -99,34 +99,34 @@ Licensed under the [Apache License, Version 2.0].
 [@axic]: https://github.com/axic
 [@chfast]: https://github.com/chfast
 [Apache License, Version 2.0]: LICENSE
-[documentation]: https://ethereum.github.io/evmc
+[documentation]: https://ethereum.github.io/ivmc
 [ewasm]: https://github.com/ewasm/design
-[evmjit]: https://github.com/ethereum/evmjit
-[evmone]: https://github.com/ethereum/evmone
-[evmone → test/fuzzer]: https://github.com/ethereum/evmone/tree/master/test/fuzzer
-[evmone → test/unittests]: https://github.com/ethereum/evmone/tree/master/test/unittests
+[evmjit]: https://github.com/ILCOINDevelopmentTeam/evmjit
+[evmone]: https://github.com/ILCOINDevelopmentTeam/evmone
+[evmone → test/fuzzer]: https://github.com/ILCOINDevelopmentTeam/evmone/tree/master/test/fuzzer
+[evmone → test/unittests]: https://github.com/ILCOINDevelopmentTeam/evmone/tree/master/test/unittests
 [Hera]: https://github.com/ewasm/hera
 [Hera.rs]: https://github.com/ewasm/hera.rs
 [Daytona]: https://github.com/axic/daytona
-[eip1962-evmc]: https://github.com/axic/eip1962-evmc
-[ssvm-evmc]: https://github.com/second-state/ssvm-evmc
-[Gitter]: https://gitter.im/ethereum/evmc
-[aleth-interpreter]: https://github.com/ethereum/aleth/tree/master/libaleth-interpreter
-[aleth]: https://github.com/ethereum/aleth
-[Solidity]: https://github.com/ethereum/solidity
-[nim-evmc]: https://github.com/status-im/nim-evmc
-[go-ethereum]: https://github.com/ethereum/go-ethereum/pull/17954
-[pyevm]: https://github.com/ethereum/py-evm
-[pyethereum]: https://github.com/ethereum/pyethereum/pull/406
+[eip1962-ivmc]: https://github.com/axic/eip1962-ivmc
+[ssvm-ivmc]: https://github.com/second-state/ssvm-ivmc
+[Gitter]: https://gitter.im/ethereum/ivmc
+[aleth-interpreter]: https://github.com/ILCOINDevelopmentTeam/aleth/tree/master/libaleth-interpreter
+[aleth]: https://github.com/ILCOINDevelopmentTeam/aleth
+[Solidity]: https://github.com/ILCOINDevelopmentTeam/solidity
+[nim-ivmc]: https://github.com/status-im/nim-ivmc
+[go-ethereum]: https://github.com/ILCOINDevelopmentTeam/go-ethereum/pull/17954
+[pyevm]: https://github.com/ILCOINDevelopmentTeam/py-evm
+[pyethereum]: https://github.com/ILCOINDevelopmentTeam/pyethereum/pull/406
 [silkworm]: https://github.com/torquem-ch/silkworm
 [turbo-geth]: https://github.com/ledgerwatch/turbo-geth
 [core-geth]: https://github.com/etclabscore/core-geth/issues/55
-[evmc-js]: https://github.com/RainBlock/evmc-js
+[ivmc-js]: https://github.com/RainBlock/ivmc-js
 [rust-ssvm]: https://github.com/second-state/rust-ssvm
 [standard readme]: https://github.com/RichardLitt/standard-readme
-[tools/evmc]: https://github.com/ethereum/evmc/tree/master/tools/evmc
-[tools/vmtester]: https://github.com/ethereum/evmc/tree/master/tools/vmtester
+[tools/ivmc]: https://github.com/ILCOINDevelopmentTeam/ivmc/tree/master/tools/ivmc
+[tools/vmtester]: https://github.com/ILCOINDevelopmentTeam/ivmc/tree/master/tools/vmtester
 
-[gitter badge]: https://img.shields.io/gitter/room/ethereum/evmc.svg
-[license badge]: https://img.shields.io/github/license/ethereum/evmc.svg?logo=apache
+[gitter badge]: https://img.shields.io/gitter/room/ethereum/ivmc.svg
+[license badge]: https://img.shields.io/github/license/ethereum/ivmc.svg?logo=apache
 [readme style standard badge]: https://img.shields.io/badge/readme%20style-standard-brightgreen.svg

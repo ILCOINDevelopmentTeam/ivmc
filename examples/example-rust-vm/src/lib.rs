@@ -1,12 +1,12 @@
-/* EVMC: Ethereum Client-VM Connector API.
- * Copyright 2019 The EVMC Authors.
+/* IVMC: Ethereum Client-VM Connector API.
+ * Copyright 2019 The IVMC Authors.
  * Licensed under the Apache License, Version 2.0.
  */
 
-use evmc_declare::evmc_declare_vm;
-use evmc_vm::*;
+use ivmc_declare::ivmc_declare_vm;
+use ivmc_vm::*;
 
-#[evmc_declare_vm("ExampleRustVM", "evm, precompiles", "10.0.0-alpha.1")]
+#[ivmc_declare_vm("ExampleRustVM", "evm, precompiles", "10.0.0-alpha.1")]
 pub struct ExampleRustVM;
 
 impl EvmcVm for ExampleRustVM {
@@ -26,7 +26,7 @@ impl EvmcVm for ExampleRustVM {
         }
         let _context = _context.unwrap();
 
-        if message.kind() != MessageKind::EVMC_CALL {
+        if message.kind() != MessageKind::IVMC_CALL {
             return ExecutionResult::failure();
         }
 

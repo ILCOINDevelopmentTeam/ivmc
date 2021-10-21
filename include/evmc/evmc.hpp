@@ -1,40 +1,40 @@
-/* EVMC: Ethereum Client-VM Connector API.
- * Copyright 2018-2020 The EVMC Authors.
+/* IVMC: Ethereum Client-VM Connector API.
+ * Copyright 2018-2020 The IVMC Authors.
  * Licensed under the Apache License, Version 2.0.
  */
 #pragma once
 
-#include <evmc/evmc.h>
-#include <evmc/helpers.h>
+#include <ivmc/ivmc.h>
+#include <ivmc/helpers.h>
 
 #include <functional>
 #include <initializer_list>
 #include <ostream>
 #include <utility>
 
-static_assert(EVMC_LATEST_STABLE_REVISION <= EVMC_MAX_REVISION,
+static_assert(IVMC_LATEST_STABLE_REVISION <= IVMC_MAX_REVISION,
               "latest stable revision ill-defined");
 
-/// EVMC C++ API - wrappers and bindings for C++
+/// IVMC C++ API - wrappers and bindings for C++
 /// @ingroup cpp
-namespace evmc
+namespace ivmc
 {
 /// The big-endian 160-bit hash suitable for keeping an Ethereum address.
 ///
-/// This type wraps C ::evmc_address to make sure objects of this type are always initialized.
-struct address : evmc_address
+/// This type wraps C ::ivmc_address to make sure objects of this type are always initialized.
+struct address : ivmc_address
 {
     /// Default and converting constructor.
     ///
     /// Initializes bytes to zeros if not other @p init value provided.
-    constexpr address(evmc_address init = {}) noexcept : evmc_address{init} {}
+    constexpr address(ivmc_address init = {}) noexcept : ivmc_address{init} {}
 
     /// Converting constructor from unsigned integer value.
     ///
     /// This constructor assigns the @p v value to the last 8 bytes [12:19]
     /// in big-endian order.
     constexpr explicit address(uint64_t v) noexcept
-      : evmc_address{{0,
+      : ivmc_address{{0,
                       0,
                       0,
                       0,
@@ -62,20 +62,20 @@ struct address : evmc_address
 
 /// The fixed size array of 32 bytes for storing 256-bit EVM values.
 ///
-/// This type wraps C ::evmc_bytes32 to make sure objects of this type are always initialized.
-struct bytes32 : evmc_bytes32
+/// This type wraps C ::ivmc_bytes32 to make sure objects of this type are always initialized.
+struct bytes32 : ivmc_bytes32
 {
     /// Default and converting constructor.
     ///
     /// Initializes bytes to zeros if not other @p init value provided.
-    constexpr bytes32(evmc_bytes32 init = {}) noexcept : evmc_bytes32{init} {}
+    constexpr bytes32(ivmc_bytes32 init = {}) noexcept : ivmc_bytes32{init} {}
 
     /// Converting constructor from unsigned integer value.
     ///
     /// This constructor assigns the @p v value to the last 8 bytes [24:31]
     /// in big-endian order.
     constexpr explicit bytes32(uint64_t v) noexcept
-      : evmc_bytes32{{0,
+      : ivmc_bytes32{{0,
                       0,
                       0,
                       0,
@@ -113,7 +113,7 @@ struct bytes32 : evmc_bytes32
     constexpr inline explicit operator bool() const noexcept;
 };
 
-/// The alias for evmc::bytes32 to represent a big-endian 256-bit integer.
+/// The alias for ivmc::bytes32 to represent a big-endian 256-bit integer.
 using uint256be = bytes32;
 
 
@@ -160,7 +160,7 @@ inline constexpr uint64_t fnv1a_by64(uint64_t h, uint64_t x) noexcept
 }  // namespace fnv
 
 
-/// The "equal to" comparison operator for the evmc::address type.
+/// The "equal to" comparison operator for the ivmc::address type.
 inline constexpr bool operator==(const address& a, const address& b) noexcept
 {
     return load64le(&a.bytes[0]) == load64le(&b.bytes[0]) &&
@@ -168,13 +168,13 @@ inline constexpr bool operator==(const address& a, const address& b) noexcept
            load32le(&a.bytes[16]) == load32le(&b.bytes[16]);
 }
 
-/// The "not equal to" comparison operator for the evmc::address type.
+/// The "not equal to" comparison operator for the ivmc::address type.
 inline constexpr bool operator!=(const address& a, const address& b) noexcept
 {
     return !(a == b);
 }
 
-/// The "less than" comparison operator for the evmc::address type.
+/// The "less than" comparison operator for the ivmc::address type.
 inline constexpr bool operator<(const address& a, const address& b) noexcept
 {
     return load64be(&a.bytes[0]) < load64be(&b.bytes[0]) ||
@@ -184,25 +184,25 @@ inline constexpr bool operator<(const address& a, const address& b) noexcept
               load32be(&a.bytes[16]) < load32be(&b.bytes[16]))));
 }
 
-/// The "greater than" comparison operator for the evmc::address type.
+/// The "greater than" comparison operator for the ivmc::address type.
 inline constexpr bool operator>(const address& a, const address& b) noexcept
 {
     return b < a;
 }
 
-/// The "less than or equal to" comparison operator for the evmc::address type.
+/// The "less than or equal to" comparison operator for the ivmc::address type.
 inline constexpr bool operator<=(const address& a, const address& b) noexcept
 {
     return !(b < a);
 }
 
-/// The "greater than or equal to" comparison operator for the evmc::address type.
+/// The "greater than or equal to" comparison operator for the ivmc::address type.
 inline constexpr bool operator>=(const address& a, const address& b) noexcept
 {
     return !(a < b);
 }
 
-/// The "equal to" comparison operator for the evmc::bytes32 type.
+/// The "equal to" comparison operator for the ivmc::bytes32 type.
 inline constexpr bool operator==(const bytes32& a, const bytes32& b) noexcept
 {
     return load64le(&a.bytes[0]) == load64le(&b.bytes[0]) &&
@@ -211,13 +211,13 @@ inline constexpr bool operator==(const bytes32& a, const bytes32& b) noexcept
            load64le(&a.bytes[24]) == load64le(&b.bytes[24]);
 }
 
-/// The "not equal to" comparison operator for the evmc::bytes32 type.
+/// The "not equal to" comparison operator for the ivmc::bytes32 type.
 inline constexpr bool operator!=(const bytes32& a, const bytes32& b) noexcept
 {
     return !(a == b);
 }
 
-/// The "less than" comparison operator for the evmc::bytes32 type.
+/// The "less than" comparison operator for the ivmc::bytes32 type.
 inline constexpr bool operator<(const bytes32& a, const bytes32& b) noexcept
 {
     return load64be(&a.bytes[0]) < load64be(&b.bytes[0]) ||
@@ -229,19 +229,19 @@ inline constexpr bool operator<(const bytes32& a, const bytes32& b) noexcept
                 load64be(&a.bytes[24]) < load64be(&b.bytes[24]))))));
 }
 
-/// The "greater than" comparison operator for the evmc::bytes32 type.
+/// The "greater than" comparison operator for the ivmc::bytes32 type.
 inline constexpr bool operator>(const bytes32& a, const bytes32& b) noexcept
 {
     return b < a;
 }
 
-/// The "less than or equal to" comparison operator for the evmc::bytes32 type.
+/// The "less than or equal to" comparison operator for the ivmc::bytes32 type.
 inline constexpr bool operator<=(const bytes32& a, const bytes32& b) noexcept
 {
     return !(b < a);
 }
 
-/// The "greater than or equal to" comparison operator for the evmc::bytes32 type.
+/// The "greater than or equal to" comparison operator for the ivmc::bytes32 type.
 inline constexpr bool operator>=(const bytes32& a, const bytes32& b) noexcept
 {
     return !(a < b);
@@ -324,14 +324,14 @@ constexpr T from_literal() noexcept
 }
 }  // namespace internal
 
-/// Literal for evmc::address.
+/// Literal for ivmc::address.
 template <char... c>
 constexpr address operator""_address() noexcept
 {
     return internal::from_literal<address, c...>();
 }
 
-/// Literal for evmc::bytes32.
+/// Literal for ivmc::bytes32.
 template <char... c>
 constexpr bytes32 operator""_bytes32() noexcept
 {
@@ -342,53 +342,53 @@ constexpr bytes32 operator""_bytes32() noexcept
 using namespace literals;
 
 
-/// @copydoc evmc_status_code_to_string
-inline const char* to_string(evmc_status_code status_code) noexcept
+/// @copydoc ivmc_status_code_to_string
+inline const char* to_string(ivmc_status_code status_code) noexcept
 {
-    return evmc_status_code_to_string(status_code);
+    return ivmc_status_code_to_string(status_code);
 }
 
-/// @copydoc evmc_revision_to_string
-inline const char* to_string(evmc_revision rev) noexcept
+/// @copydoc ivmc_revision_to_string
+inline const char* to_string(ivmc_revision rev) noexcept
 {
-    return evmc_revision_to_string(rev);
+    return ivmc_revision_to_string(rev);
 }
 
 
-/// Alias for evmc_make_result().
-constexpr auto make_result = evmc_make_result;
+/// Alias for ivmc_make_result().
+constexpr auto make_result = ivmc_make_result;
 
-/// @copydoc evmc_result
+/// @copydoc ivmc_result
 ///
-/// This is a RAII wrapper for evmc_result and objects of this type
+/// This is a RAII wrapper for ivmc_result and objects of this type
 /// automatically release attached resources.
-class result : private evmc_result
+class result : private ivmc_result
 {
 public:
-    using evmc_result::create_address;
-    using evmc_result::gas_left;
-    using evmc_result::output_data;
-    using evmc_result::output_size;
-    using evmc_result::status_code;
+    using ivmc_result::create_address;
+    using ivmc_result::gas_left;
+    using ivmc_result::output_data;
+    using ivmc_result::output_size;
+    using ivmc_result::status_code;
 
     /// Creates the result from the provided arguments.
     ///
     /// The provided output is copied to memory allocated with malloc()
-    /// and the evmc_result::release function is set to one invoking free().
+    /// and the ivmc_result::release function is set to one invoking free().
     ///
     /// @param _status_code  The status code.
     /// @param _gas_left     The amount of gas left.
     /// @param _output_data  The pointer to the output.
     /// @param _output_size  The output size.
-    result(evmc_status_code _status_code,
+    result(ivmc_status_code _status_code,
            int64_t _gas_left,
            const uint8_t* _output_data,
            size_t _output_size) noexcept
-      : evmc_result{make_result(_status_code, _gas_left, _output_data, _output_size)}
+      : ivmc_result{make_result(_status_code, _gas_left, _output_data, _output_size)}
     {}
 
-    /// Converting constructor from raw evmc_result.
-    explicit result(evmc_result const& res) noexcept : evmc_result{res} {}
+    /// Converting constructor from raw ivmc_result.
+    explicit result(ivmc_result const& res) noexcept : ivmc_result{res} {}
 
     /// Destructor responsible for automatically releasing attached resources.
     ~result() noexcept
@@ -398,7 +398,7 @@ public:
     }
 
     /// Move constructor.
-    result(result&& other) noexcept : evmc_result{other}
+    result(result&& other) noexcept : ivmc_result{other}
     {
         other.release = nullptr;  // Disable releasing of the rvalue object.
     }
@@ -412,104 +412,104 @@ public:
     result& operator=(result&& other) noexcept
     {
         this->~result();                           // Release this object.
-        static_cast<evmc_result&>(*this) = other;  // Copy data.
+        static_cast<ivmc_result&>(*this) = other;  // Copy data.
         other.release = nullptr;                   // Disable releasing of the rvalue object.
         return *this;
     }
 
-    /// Releases the ownership and returns the raw copy of evmc_result.
+    /// Releases the ownership and returns the raw copy of ivmc_result.
     ///
     /// This method drops the ownership of the result
     /// (result's resources are not going to be released when this object is destructed).
     /// It is the caller's responsibility having the returned copy of the result to release it.
     /// This object MUST NOT be used after this method is invoked.
     ///
-    /// @return  The copy of this object converted to raw evmc_result.
-    evmc_result release_raw() noexcept
+    /// @return  The copy of this object converted to raw ivmc_result.
+    ivmc_result release_raw() noexcept
     {
-        const auto out = evmc_result{*this};  // Copy data.
+        const auto out = ivmc_result{*this};  // Copy data.
         this->release = nullptr;              // Disable releasing of this object.
         return out;
     }
 };
 
 
-/// The EVMC Host interface
+/// The IVMC Host interface
 class HostInterface
 {
 public:
     virtual ~HostInterface() noexcept = default;
 
-    /// @copydoc evmc_host_interface::account_exists
+    /// @copydoc ivmc_host_interface::account_exists
     virtual bool account_exists(const address& addr) const noexcept = 0;
 
-    /// @copydoc evmc_host_interface::get_storage
+    /// @copydoc ivmc_host_interface::get_storage
     virtual bytes32 get_storage(const address& addr, const bytes32& key) const noexcept = 0;
 
-    /// @copydoc evmc_host_interface::set_storage
-    virtual evmc_storage_status set_storage(const address& addr,
+    /// @copydoc ivmc_host_interface::set_storage
+    virtual ivmc_storage_status set_storage(const address& addr,
                                             const bytes32& key,
                                             const bytes32& value) noexcept = 0;
 
-    /// @copydoc evmc_host_interface::get_balance
+    /// @copydoc ivmc_host_interface::get_balance
     virtual uint256be get_balance(const address& addr) const noexcept = 0;
 
-    /// @copydoc evmc_host_interface::get_code_size
+    /// @copydoc ivmc_host_interface::get_code_size
     virtual size_t get_code_size(const address& addr) const noexcept = 0;
 
-    /// @copydoc evmc_host_interface::get_code_hash
+    /// @copydoc ivmc_host_interface::get_code_hash
     virtual bytes32 get_code_hash(const address& addr) const noexcept = 0;
 
-    /// @copydoc evmc_host_interface::copy_code
+    /// @copydoc ivmc_host_interface::copy_code
     virtual size_t copy_code(const address& addr,
                              size_t code_offset,
                              uint8_t* buffer_data,
                              size_t buffer_size) const noexcept = 0;
 
-    /// @copydoc evmc_host_interface::selfdestruct
+    /// @copydoc ivmc_host_interface::selfdestruct
     virtual void selfdestruct(const address& addr, const address& beneficiary) noexcept = 0;
 
-    /// @copydoc evmc_host_interface::call
-    virtual result call(const evmc_message& msg) noexcept = 0;
+    /// @copydoc ivmc_host_interface::call
+    virtual result call(const ivmc_message& msg) noexcept = 0;
 
-    /// @copydoc evmc_host_interface::get_tx_context
-    virtual evmc_tx_context get_tx_context() const noexcept = 0;
+    /// @copydoc ivmc_host_interface::get_tx_context
+    virtual ivmc_tx_context get_tx_context() const noexcept = 0;
 
-    /// @copydoc evmc_host_interface::get_block_hash
+    /// @copydoc ivmc_host_interface::get_block_hash
     virtual bytes32 get_block_hash(int64_t block_number) const noexcept = 0;
 
-    /// @copydoc evmc_host_interface::emit_log
+    /// @copydoc ivmc_host_interface::emit_log
     virtual void emit_log(const address& addr,
                           const uint8_t* data,
                           size_t data_size,
                           const bytes32 topics[],
                           size_t num_topics) noexcept = 0;
 
-    /// @copydoc evmc_host_interface::access_account
-    virtual evmc_access_status access_account(const address& addr) noexcept = 0;
+    /// @copydoc ivmc_host_interface::access_account
+    virtual ivmc_access_status access_account(const address& addr) noexcept = 0;
 
-    /// @copydoc evmc_host_interface::access_storage
-    virtual evmc_access_status access_storage(const address& addr, const bytes32& key) noexcept = 0;
+    /// @copydoc ivmc_host_interface::access_storage
+    virtual ivmc_access_status access_storage(const address& addr, const bytes32& key) noexcept = 0;
 };
 
 
-/// Wrapper around EVMC host context / host interface.
+/// Wrapper around IVMC host context / host interface.
 ///
-/// To be used by VM implementations as better alternative to using ::evmc_host_context directly.
+/// To be used by VM implementations as better alternative to using ::ivmc_host_context directly.
 class HostContext : public HostInterface
 {
-    const evmc_host_interface* host = nullptr;
-    evmc_host_context* context = nullptr;
-    mutable evmc_tx_context tx_context = {};
+    const ivmc_host_interface* host = nullptr;
+    ivmc_host_context* context = nullptr;
+    mutable ivmc_tx_context tx_context = {};
 
 public:
     /// Default constructor for null Host context.
     HostContext() = default;
 
-    /// Constructor from the EVMC Host primitives.
+    /// Constructor from the IVMC Host primitives.
     /// @param interface  The reference to the Host interface.
     /// @param ctx        The pointer to the Host context object. This parameter MAY be null.
-    HostContext(const evmc_host_interface& interface, evmc_host_context* ctx) noexcept
+    HostContext(const ivmc_host_interface& interface, ivmc_host_context* ctx) noexcept
       : host{&interface}, context{ctx}
     {}
 
@@ -523,7 +523,7 @@ public:
         return host->get_storage(context, &address, &key);
     }
 
-    evmc_storage_status set_storage(const address& address,
+    ivmc_storage_status set_storage(const address& address,
                                     const bytes32& key,
                                     const bytes32& value) noexcept final
     {
@@ -558,7 +558,7 @@ public:
         host->selfdestruct(context, &addr, &beneficiary);
     }
 
-    result call(const evmc_message& message) noexcept final
+    result call(const ivmc_message& message) noexcept final
     {
         return result{host->call(context, &message)};
     }
@@ -569,7 +569,7 @@ public:
     /// by assuming that the block timestamp should never be zero.
     ///
     /// @return The cached transaction context.
-    evmc_tx_context get_tx_context() const noexcept final
+    ivmc_tx_context get_tx_context() const noexcept final
     {
         if (tx_context.block_timestamp == 0)
             tx_context = host->get_tx_context(context);
@@ -590,12 +590,12 @@ public:
         host->emit_log(context, &addr, data, data_size, topics, topics_count);
     }
 
-    evmc_access_status access_account(const address& address) noexcept final
+    ivmc_access_status access_account(const address& address) noexcept final
     {
         return host->access_account(context, &address);
     }
 
-    evmc_access_status access_storage(const address& address, const bytes32& key) noexcept final
+    ivmc_access_status access_storage(const address& address, const bytes32& key) noexcept final
     {
         return host->access_storage(context, &address, &key);
     }
@@ -604,26 +604,26 @@ public:
 
 /// Abstract class to be used by Host implementations.
 ///
-/// When implementing EVMC Host, you can directly inherit from the evmc::Host class.
+/// When implementing IVMC Host, you can directly inherit from the ivmc::Host class.
 /// This way your implementation will be simpler by avoiding manual handling
-/// of the ::evmc_host_context and the ::evmc_host_interface.
+/// of the ::ivmc_host_context and the ::ivmc_host_interface.
 class Host : public HostInterface
 {
 public:
     /// Provides access to the global host interface.
     /// @returns  Reference to the host interface object.
-    static const evmc_host_interface& get_interface() noexcept;
+    static const ivmc_host_interface& get_interface() noexcept;
 
     /// Converts the Host object to the opaque host context pointer.
-    /// @returns  Pointer to evmc_host_context.
-    evmc_host_context* to_context() noexcept { return reinterpret_cast<evmc_host_context*>(this); }
+    /// @returns  Pointer to ivmc_host_context.
+    ivmc_host_context* to_context() noexcept { return reinterpret_cast<ivmc_host_context*>(this); }
 
     /// Converts the opaque host context pointer back to the original Host object.
     /// @tparam DerivedClass  The class derived from the Host class.
     /// @param context        The opaque host context pointer.
     /// @returns              The pointer to DerivedClass.
     template <typename DerivedClass = Host>
-    static DerivedClass* from_context(evmc_host_context* context) noexcept
+    static DerivedClass* from_context(ivmc_host_context* context) noexcept
     {
         // Get pointer of the Host base class.
         auto* h = reinterpret_cast<Host*>(context);
@@ -634,17 +634,17 @@ public:
 };
 
 
-/// @copybrief evmc_vm
+/// @copybrief ivmc_vm
 ///
-/// This is a RAII wrapper for evmc_vm, and object of this type
+/// This is a RAII wrapper for ivmc_vm, and object of this type
 /// automatically destroys the VM instance.
 class VM
 {
 public:
     VM() noexcept = default;
 
-    /// Converting constructor from evmc_vm.
-    explicit VM(evmc_vm* vm) noexcept : m_instance{vm} {}
+    /// Converting constructor from ivmc_vm.
+    explicit VM(ivmc_vm* vm) noexcept : m_instance{vm} {}
 
     /// Destructor responsible for automatically destroying the VM instance.
     ~VM() noexcept
@@ -670,54 +670,54 @@ public:
 
     /// The constructor that captures a VM instance and configures the instance
     /// with the provided list of options.
-    inline VM(evmc_vm* vm,
+    inline VM(ivmc_vm* vm,
               std::initializer_list<std::pair<const char*, const char*>> options) noexcept;
 
     /// Checks if contains a valid pointer to the VM instance.
     explicit operator bool() const noexcept { return m_instance != nullptr; }
 
-    /// Checks whenever the VM instance is ABI compatible with the current EVMC API.
-    bool is_abi_compatible() const noexcept { return m_instance->abi_version == EVMC_ABI_VERSION; }
+    /// Checks whenever the VM instance is ABI compatible with the current IVMC API.
+    bool is_abi_compatible() const noexcept { return m_instance->abi_version == IVMC_ABI_VERSION; }
 
-    /// @copydoc evmc_vm::name
+    /// @copydoc ivmc_vm::name
     char const* name() const noexcept { return m_instance->name; }
 
-    /// @copydoc evmc_vm::version
+    /// @copydoc ivmc_vm::version
     char const* version() const noexcept { return m_instance->version; }
 
     /// Checks if the VM has the given capability.
-    bool has_capability(evmc_capabilities capability) const noexcept
+    bool has_capability(ivmc_capabilities capability) const noexcept
     {
-        return (get_capabilities() & static_cast<evmc_capabilities_flagset>(capability)) != 0;
+        return (get_capabilities() & static_cast<ivmc_capabilities_flagset>(capability)) != 0;
     }
 
-    /// @copydoc evmc_vm::get_capabilities
-    evmc_capabilities_flagset get_capabilities() const noexcept
+    /// @copydoc ivmc_vm::get_capabilities
+    ivmc_capabilities_flagset get_capabilities() const noexcept
     {
         return m_instance->get_capabilities(m_instance);
     }
 
-    /// @copydoc evmc_set_option()
-    evmc_set_option_result set_option(const char name[], const char value[]) noexcept
+    /// @copydoc ivmc_set_option()
+    ivmc_set_option_result set_option(const char name[], const char value[]) noexcept
     {
-        return evmc_set_option(m_instance, name, value);
+        return ivmc_set_option(m_instance, name, value);
     }
 
-    /// @copydoc evmc_execute()
-    result execute(const evmc_host_interface& host,
-                   evmc_host_context* ctx,
-                   evmc_revision rev,
-                   const evmc_message& msg,
+    /// @copydoc ivmc_execute()
+    result execute(const ivmc_host_interface& host,
+                   ivmc_host_context* ctx,
+                   ivmc_revision rev,
+                   const ivmc_message& msg,
                    const uint8_t* code,
                    size_t code_size) noexcept
     {
         return result{m_instance->execute(m_instance, &host, ctx, rev, &msg, code, code_size)};
     }
 
-    /// Convenient variant of the VM::execute() that takes reference to evmc::Host class.
+    /// Convenient variant of the VM::execute() that takes reference to ivmc::Host class.
     result execute(Host& host,
-                   evmc_revision rev,
-                   const evmc_message& msg,
+                   ivmc_revision rev,
+                   const ivmc_message& msg,
                    const uint8_t* code,
                    size_t code_size) noexcept
     {
@@ -727,13 +727,13 @@ public:
     /// Executes code without the Host context.
     ///
     /// The same as
-    /// execute(const evmc_host_interface&, evmc_host_context*, evmc_revision,
-    ///         const evmc_message&, const uint8_t*, size_t),
+    /// execute(const ivmc_host_interface&, ivmc_host_context*, ivmc_revision,
+    ///         const ivmc_message&, const uint8_t*, size_t),
     /// but without providing the Host context and interface.
     /// This method is for experimental precompiles support where execution is
     /// guaranteed not to require any Host access.
-    result execute(evmc_revision rev,
-                   const evmc_message& msg,
+    result execute(ivmc_revision rev,
+                   const ivmc_message& msg,
                    const uint8_t* code,
                    size_t code_size) noexcept
     {
@@ -741,18 +741,18 @@ public:
             m_instance->execute(m_instance, nullptr, nullptr, rev, &msg, code, code_size)};
     }
 
-    /// Returns the pointer to C EVMC struct representing the VM.
+    /// Returns the pointer to C IVMC struct representing the VM.
     ///
-    /// Gives access to the C EVMC VM struct to allow advanced interaction with the VM not supported
+    /// Gives access to the C IVMC VM struct to allow advanced interaction with the VM not supported
     /// by the C++ interface. Use as the last resort.
     /// This object still owns the VM after returning the pointer. The returned pointer MAY be null.
-    evmc_vm* get_raw_pointer() const noexcept { return m_instance; }
+    ivmc_vm* get_raw_pointer() const noexcept { return m_instance; }
 
 private:
-    evmc_vm* m_instance = nullptr;
+    ivmc_vm* m_instance = nullptr;
 };
 
-inline VM::VM(evmc_vm* vm,
+inline VM::VM(ivmc_vm* vm,
               std::initializer_list<std::pair<const char*, const char*>> options) noexcept
   : m_instance{vm}
 {
@@ -764,43 +764,43 @@ inline VM::VM(evmc_vm* vm,
 
 namespace internal
 {
-inline bool account_exists(evmc_host_context* h, const evmc_address* addr) noexcept
+inline bool account_exists(ivmc_host_context* h, const ivmc_address* addr) noexcept
 {
     return Host::from_context(h)->account_exists(*addr);
 }
 
-inline evmc_bytes32 get_storage(evmc_host_context* h,
-                                const evmc_address* addr,
-                                const evmc_bytes32* key) noexcept
+inline ivmc_bytes32 get_storage(ivmc_host_context* h,
+                                const ivmc_address* addr,
+                                const ivmc_bytes32* key) noexcept
 {
     return Host::from_context(h)->get_storage(*addr, *key);
 }
 
-inline evmc_storage_status set_storage(evmc_host_context* h,
-                                       const evmc_address* addr,
-                                       const evmc_bytes32* key,
-                                       const evmc_bytes32* value) noexcept
+inline ivmc_storage_status set_storage(ivmc_host_context* h,
+                                       const ivmc_address* addr,
+                                       const ivmc_bytes32* key,
+                                       const ivmc_bytes32* value) noexcept
 {
     return Host::from_context(h)->set_storage(*addr, *key, *value);
 }
 
-inline evmc_uint256be get_balance(evmc_host_context* h, const evmc_address* addr) noexcept
+inline ivmc_uint256be get_balance(ivmc_host_context* h, const ivmc_address* addr) noexcept
 {
     return Host::from_context(h)->get_balance(*addr);
 }
 
-inline size_t get_code_size(evmc_host_context* h, const evmc_address* addr) noexcept
+inline size_t get_code_size(ivmc_host_context* h, const ivmc_address* addr) noexcept
 {
     return Host::from_context(h)->get_code_size(*addr);
 }
 
-inline evmc_bytes32 get_code_hash(evmc_host_context* h, const evmc_address* addr) noexcept
+inline ivmc_bytes32 get_code_hash(ivmc_host_context* h, const ivmc_address* addr) noexcept
 {
     return Host::from_context(h)->get_code_hash(*addr);
 }
 
-inline size_t copy_code(evmc_host_context* h,
-                        const evmc_address* addr,
+inline size_t copy_code(ivmc_host_context* h,
+                        const ivmc_address* addr,
                         size_t code_offset,
                         uint8_t* buffer_data,
                         size_t buffer_size) noexcept
@@ -808,96 +808,96 @@ inline size_t copy_code(evmc_host_context* h,
     return Host::from_context(h)->copy_code(*addr, code_offset, buffer_data, buffer_size);
 }
 
-inline void selfdestruct(evmc_host_context* h,
-                         const evmc_address* addr,
-                         const evmc_address* beneficiary) noexcept
+inline void selfdestruct(ivmc_host_context* h,
+                         const ivmc_address* addr,
+                         const ivmc_address* beneficiary) noexcept
 {
     Host::from_context(h)->selfdestruct(*addr, *beneficiary);
 }
 
-inline evmc_result call(evmc_host_context* h, const evmc_message* msg) noexcept
+inline ivmc_result call(ivmc_host_context* h, const ivmc_message* msg) noexcept
 {
     return Host::from_context(h)->call(*msg).release_raw();
 }
 
-inline evmc_tx_context get_tx_context(evmc_host_context* h) noexcept
+inline ivmc_tx_context get_tx_context(ivmc_host_context* h) noexcept
 {
     return Host::from_context(h)->get_tx_context();
 }
 
-inline evmc_bytes32 get_block_hash(evmc_host_context* h, int64_t block_number) noexcept
+inline ivmc_bytes32 get_block_hash(ivmc_host_context* h, int64_t block_number) noexcept
 {
     return Host::from_context(h)->get_block_hash(block_number);
 }
 
-inline void emit_log(evmc_host_context* h,
-                     const evmc_address* addr,
+inline void emit_log(ivmc_host_context* h,
+                     const ivmc_address* addr,
                      const uint8_t* data,
                      size_t data_size,
-                     const evmc_bytes32 topics[],
+                     const ivmc_bytes32 topics[],
                      size_t num_topics) noexcept
 {
     Host::from_context(h)->emit_log(*addr, data, data_size, static_cast<const bytes32*>(topics),
                                     num_topics);
 }
 
-inline evmc_access_status access_account(evmc_host_context* h, const evmc_address* addr) noexcept
+inline ivmc_access_status access_account(ivmc_host_context* h, const ivmc_address* addr) noexcept
 {
     return Host::from_context(h)->access_account(*addr);
 }
 
-inline evmc_access_status access_storage(evmc_host_context* h,
-                                         const evmc_address* addr,
-                                         const evmc_bytes32* key) noexcept
+inline ivmc_access_status access_storage(ivmc_host_context* h,
+                                         const ivmc_address* addr,
+                                         const ivmc_bytes32* key) noexcept
 {
     return Host::from_context(h)->access_storage(*addr, *key);
 }
 }  // namespace internal
 
-inline const evmc_host_interface& Host::get_interface() noexcept
+inline const ivmc_host_interface& Host::get_interface() noexcept
 {
-    static constexpr evmc_host_interface interface{
-        ::evmc::internal::account_exists, ::evmc::internal::get_storage,
-        ::evmc::internal::set_storage,    ::evmc::internal::get_balance,
-        ::evmc::internal::get_code_size,  ::evmc::internal::get_code_hash,
-        ::evmc::internal::copy_code,      ::evmc::internal::selfdestruct,
-        ::evmc::internal::call,           ::evmc::internal::get_tx_context,
-        ::evmc::internal::get_block_hash, ::evmc::internal::emit_log,
-        ::evmc::internal::access_account, ::evmc::internal::access_storage,
+    static constexpr ivmc_host_interface interface{
+        ::ivmc::internal::account_exists, ::ivmc::internal::get_storage,
+        ::ivmc::internal::set_storage,    ::ivmc::internal::get_balance,
+        ::ivmc::internal::get_code_size,  ::ivmc::internal::get_code_hash,
+        ::ivmc::internal::copy_code,      ::ivmc::internal::selfdestruct,
+        ::ivmc::internal::call,           ::ivmc::internal::get_tx_context,
+        ::ivmc::internal::get_block_hash, ::ivmc::internal::emit_log,
+        ::ivmc::internal::access_account, ::ivmc::internal::access_storage,
     };
     return interface;
 }
-}  // namespace evmc
+}  // namespace ivmc
 
 
-/// "Stream out" operator implementation for ::evmc_status_code.
+/// "Stream out" operator implementation for ::ivmc_status_code.
 ///
-/// @note This is defined in global namespace to match ::evmc_status_code definition and allow
+/// @note This is defined in global namespace to match ::ivmc_status_code definition and allow
 ///       convenient operator overloading usage.
-inline std::ostream& operator<<(std::ostream& os, evmc_status_code status_code)
+inline std::ostream& operator<<(std::ostream& os, ivmc_status_code status_code)
 {
-    return os << evmc::to_string(status_code);
+    return os << ivmc::to_string(status_code);
 }
 
-/// "Stream out" operator implementation for ::evmc_revision.
+/// "Stream out" operator implementation for ::ivmc_revision.
 ///
-/// @note This is defined in global namespace to match ::evmc_revision definition and allow
+/// @note This is defined in global namespace to match ::ivmc_revision definition and allow
 ///       convenient operator overloading usage.
-inline std::ostream& operator<<(std::ostream& os, evmc_revision rev)
+inline std::ostream& operator<<(std::ostream& os, ivmc_revision rev)
 {
-    return os << evmc::to_string(rev);
+    return os << ivmc::to_string(rev);
 }
 
 namespace std
 {
-/// Hash operator template specialization for evmc::address. Needed for unordered containers.
+/// Hash operator template specialization for ivmc::address. Needed for unordered containers.
 template <>
-struct hash<evmc::address>
+struct hash<ivmc::address>
 {
     /// Hash operator using FNV1a-based folding.
-    constexpr size_t operator()(const evmc::address& s) const noexcept
+    constexpr size_t operator()(const ivmc::address& s) const noexcept
     {
-        using namespace evmc;
+        using namespace ivmc;
         using namespace fnv;
         return static_cast<size_t>(fnv1a_by64(
             fnv1a_by64(fnv1a_by64(fnv::offset_basis, load64le(&s.bytes[0])), load64le(&s.bytes[8])),
@@ -905,14 +905,14 @@ struct hash<evmc::address>
     }
 };
 
-/// Hash operator template specialization for evmc::bytes32. Needed for unordered containers.
+/// Hash operator template specialization for ivmc::bytes32. Needed for unordered containers.
 template <>
-struct hash<evmc::bytes32>
+struct hash<ivmc::bytes32>
 {
     /// Hash operator using FNV1a-based folding.
-    constexpr size_t operator()(const evmc::bytes32& s) const noexcept
+    constexpr size_t operator()(const ivmc::bytes32& s) const noexcept
     {
-        using namespace evmc;
+        using namespace ivmc;
         using namespace fnv;
         return static_cast<size_t>(
             fnv1a_by64(fnv1a_by64(fnv1a_by64(fnv1a_by64(fnv::offset_basis, load64le(&s.bytes[0])),

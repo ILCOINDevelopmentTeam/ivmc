@@ -1,8 +1,8 @@
-# EVMC – Ethereum Client-VM Connector API {#mainpage}
+# IVMC – Ethereum Client-VM Connector API {#mainpage}
 
 **ABI version 10**
 
-The EVMC is the low-level ABI between Ethereum Virtual Machines (EVMs) and
+The IVMC is the low-level ABI between Ethereum Virtual Machines (EVMs) and
 Ethereum Clients. On the EVM-side it supports classic EVM1 and [ewasm].
 On the Client-side it defines the interface for EVM implementations
 to access Ethereum environment and state.
@@ -16,13 +16,13 @@ to access Ethereum environment and state.
 
 # Versioning {#versioning}
 
-The EVMC project uses [Semantic Versioning](https://semver.org).
+The IVMC project uses [Semantic Versioning](https://semver.org).
 The version format is `MAJOR.MINOR.PATCH`.
 
-The _MAJOR_ version number is also referenced as the **EVMC ABI version**.
-This ABI version is available to VM and Host implementations by ::EVMC_ABI_VERSION.
-For example EVMC 3.2.1 would have ABI version 3 and therefore this project release
-can be referenced as EVMC ABIv3 or just EVMC 3.
+The _MAJOR_ version number is also referenced as the **IVMC ABI version**.
+This ABI version is available to VM and Host implementations by ::IVMC_ABI_VERSION.
+For example IVMC 3.2.1 would have ABI version 3 and therefore this project release
+can be referenced as IVMC ABIv3 or just IVMC 3.
 Every C ABI breaking change requires increasing the _MAJOR_ version number.
 
 The releases with _MINOR_ version change allow adding new API features
@@ -35,18 +35,18 @@ API changes are allowed when required to fix a broken feature.
 
 # Modules {#modules}
 
-- [EVMC](@ref EVMC)
+- [IVMC](@ref IVMC)
    – the main component that defines API for VMs and Clients (Hosts).
-- [EVMC C++ API](@ref evmc)
+- [IVMC C++ API](@ref ivmc)
    – the wrappers and bindings for C++.
-- [EVMC Loader](@ref loader)
+- [IVMC Loader](@ref loader)
    – the library for loading VMs implemented as Dynamically Loaded Libraries (DLLs, shared objects).
-- [EVMC Helpers](@ref helpers)
-   – a collection of utility functions for easier integration with EVMC.
+- [IVMC Helpers](@ref helpers)
+   – a collection of utility functions for easier integration with IVMC.
 - [EVM Instructions](@ref instructions)
    – the library with collection of metrics for EVM1 instruction set.
-- [EVMC VM Tester](@ref vmtester)
-   – the EVMC-compatibility testing tool for VM implementations.
+- [IVMC VM Tester](@ref vmtester)
+   – the IVMC-compatibility testing tool for VM implementations.
 
 
 # Language bindings {#bindings}
@@ -54,14 +54,14 @@ API changes are allowed when required to fix a broken feature.
 ## Go
 
 ```go
-import "github.com/ethereum/evmc/bindings/go/evmc"
+import "github.com/ethereum/ivmc/bindings/go/ivmc"
 ```
 
 
 [ewasm]: https://github.com/ewasm/design
 
 
-@addtogroup EVMC
+@addtogroup IVMC
 
 ## Terms
 

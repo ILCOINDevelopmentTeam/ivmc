@@ -1,5 +1,5 @@
-# EVMC: Ethereum Client-VM Connector API.
-# Copyright 2019-2020 The EVMC Authors.
+# IVMC: Ethereum Client-VM Connector API.
+# Copyright 2019-2020 The IVMC Authors.
 # Licensed under the Apache License, Version 2.0.
 
 JAVA_HOME:=$(shell java -XshowSettings:properties -version 2>&1 > /dev/null | grep 'java.home' | sed 's/\s*java.home = //' | sed 's/\/jre//')
@@ -23,7 +23,7 @@ BUILD_DIR = $(OUT_DIR)/_cmake_build
 lint: gradlew
 	./gradlew --no-daemon clean spotlessCheck
 
-build: gradlew java/src/test/resources/libexample-vm.$(EXTENSION) java/src/main/resources/libevmc-java.$(EXTENSION)
+build: gradlew java/src/test/resources/libexample-vm.$(EXTENSION) java/src/main/resources/libivmc-java.$(EXTENSION)
 	mkdir -p ./java/build
 	./gradlew --no-daemon clean spotlessApply build
 
@@ -33,16 +33,16 @@ test: build
 gradlew:
 	gradle --no-daemon setup
 
-$(OUT_DIR)/lib/libexample-vm.$(EXTENSION): $(OUT_DIR)/lib/libevmc-java.$(EXTENSION)
+$(OUT_DIR)/lib/libexample-vm.$(EXTENSION): $(OUT_DIR)/lib/libivmc-java.$(EXTENSION)
 
-$(OUT_DIR)/lib/libevmc-java.$(EXTENSION):
+$(OUT_DIR)/lib/libivmc-java.$(EXTENSION):
 	mkdir -p $(BUILD_DIR)
-	(cd $(BUILD_DIR) && cmake $(SOURCE_DIR) -DCMAKE_INSTALL_PREFIX=$(OUT_DIR) -DEVMC_JAVA=ON -DJAVA_HOME=$(JAVA_HOME) -DEVMC_EXAMPLES=ON)
+	(cd $(BUILD_DIR) && cmake $(SOURCE_DIR) -DCMAKE_INSTALL_PREFIX=$(OUT_DIR) -DIVMC_JAVA=ON -DJAVA_HOME=$(JAVA_HOME) -DIVMC_EXAMPLES=ON)
 	cmake --build $(OUT_DIR)/_cmake_build --target install
 
-java/src/main/resources/libevmc-java.$(EXTENSION): $(OUT_DIR)/lib/libevmc-java.$(EXTENSION)
+java/src/main/resources/libivmc-java.$(EXTENSION): $(OUT_DIR)/lib/libivmc-java.$(EXTENSION)
 	mkdir -p java/src/main/resources
-	cp $(OUT_DIR)/lib/libevmc-java.$(EXTENSION) java/src/main/resources/libevmc-java.$(EXTENSION)
+	cp $(OUT_DIR)/lib/libivmc-java.$(EXTENSION) java/src/main/resources/libivmc-java.$(EXTENSION)
 
 java/src/test/resources/libexample-vm.$(EXTENSION): $(OUT_DIR)/lib/libexample-vm.$(EXTENSION)
 	mkdir -p java/src/test/resources

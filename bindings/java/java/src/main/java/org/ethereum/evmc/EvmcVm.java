@@ -1,7 +1,7 @@
-// EVMC: Ethereum Client-VM Connector API.
-// Copyright 2019-2020 The EVMC Authors.
+// IVMC: Ethereum Client-VM Connector API.
+// Copyright 2019-2020 The IVMC Authors.
 // Licensed under the Apache License, Version 2.0.
-package org.ethereum.evmc;
+package org.ethereum.ivmc;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -15,16 +15,16 @@ import java.nio.file.StandardCopyOption;
  * <p>Defines the Java methods capable of accessing the evm implementation.
  */
 public final class EvmcVm implements AutoCloseable {
-  private static final Throwable evmcLoadingError;
+  private static final Throwable ivmcLoadingError;
   private ByteBuffer nativeVm;
 
-  // Load the dynamic library containing the JNI bindings to EVMC.
+  // Load the dynamic library containing the JNI bindings to IVMC.
   static {
     Throwable error = null;
 
     // First try loading from global path.
     try {
-      System.loadLibrary("libevmc-java");
+      System.loadLibrary("libivmc-java");
     } catch (UnsatisfiedLinkError globalLoadingError) {
       String extension = null;
       String os = System.getProperty("os.name").toLowerCase();
@@ -42,15 +42,15 @@ public final class EvmcVm implements AutoCloseable {
       // Try loading the binding from the package.
       if (extension != null) {
         try {
-          Path evmcLib = Files.createTempFile("libevmc-java", extension);
+          Path ivmcLib = Files.createTempFile("libivmc-java", extension);
           Files.copy(
-              EvmcVm.class.getResourceAsStream("/libevmc-java." + extension),
-              evmcLib,
+              EvmcVm.class.getResourceAsStream("/libivmc-java." + extension),
+              ivmcLib,
               StandardCopyOption.REPLACE_EXISTING);
-          evmcLib.toFile().deleteOnExit();
+          ivmcLib.toFile().deleteOnExit();
           // We are somewhat certain about the file, try loading it.
           try {
-            System.load(evmcLib.toAbsolutePath().toString());
+            System.load(ivmcLib.toAbsolutePath().toString());
           } catch (UnsatisfiedLinkError packageLoadingError) {
             error = packageLoadingError;
           }
@@ -59,27 +59,27 @@ public final class EvmcVm implements AutoCloseable {
         }
       }
     }
-    evmcLoadingError = error;
+    ivmcLoadingError = error;
   }
 
   /**
-   * Returns true if the native library was loaded successfully and EVMC capabilities are available.
+   * Returns true if the native library was loaded successfully and IVMC capabilities are available.
    *
    * @return true if the library is available
    */
   public static boolean isAvailable() {
-    return evmcLoadingError == null;
+    return ivmcLoadingError == null;
   }
 
   /**
    * This method loads the specified evm shared library and loads/initializes the jni bindings.
    *
    * @param filename /path/filename of the evm shared object
-   * @throws org.ethereum.evmc.EvmcLoaderException
+   * @throws org.ethereum.ivmc.EvmcLoaderException
    */
   public static EvmcVm create(String filename) throws EvmcLoaderException {
     if (!isAvailable()) {
-      throw new EvmcLoaderException("EVMC JNI binding library failed to load", evmcLoadingError);
+      throw new EvmcLoaderException("IVMC JNI binding library failed to load", ivmcLoadingError);
     }
     return new EvmcVm(filename);
   }
@@ -93,20 +93,20 @@ public final class EvmcVm implements AutoCloseable {
    *
    * @param filename Path to the dynamic object representing the EVM implementation
    * @return Internal object pointer.
-   * @throws org.ethereum.evmc.EvmcLoaderException
+   * @throws org.ethereum.ivmc.EvmcLoaderException
    */
   private static native ByteBuffer load_and_create(String filename) throws EvmcLoaderException;
 
   /**
-   * EVMC ABI version implemented by the VM instance.
+   * IVMC ABI version implemented by the VM instance.
    *
-   * <p>Can be used to detect ABI incompatibilities. The EVMC ABI version represented by this file
-   * is in ::EVMC_ABI_VERSION.
+   * <p>Can be used to detect ABI incompatibilities. The IVMC ABI version represented by this file
+   * is in ::IVMC_ABI_VERSION.
    */
   public static native int abi_version();
 
   /**
-   * The name of the EVMC VM implementation.
+   * The name of the IVMC VM implementation.
    *
    * <p>It MUST be a NULL-terminated not empty string. The content MUST be UTF-8 encoded (this
    * implies ASCII encoding is also allowed).
@@ -119,7 +119,7 @@ public final class EvmcVm implements AutoCloseable {
   }
 
   /**
-   * The version of the EVMC VM implementation, e.g. "1.2.3b4".
+   * The version of the IVMC VM implementation, e.g. "1.2.3b4".
    *
    * <p>It MUST be a NULL-terminated not empty string. The content MUST be UTF-8 encoded (this
    * implies ASCII encoding is also allowed).

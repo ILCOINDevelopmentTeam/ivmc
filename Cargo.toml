@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "bindings/rust/evmc-sys",
-    "bindings/rust/evmc-vm",
-    "bindings/rust/evmc-declare",
-    "bindings/rust/evmc-declare-tests",
+    "bindings/rust/ivmc-sys",
+    "bindings/rust/ivmc-vm",
+    "bindings/rust/ivmc-declare",
+    "bindings/rust/ivmc-declare-tests",
     "examples/example-rust-vm"
 ]

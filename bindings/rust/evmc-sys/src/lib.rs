@@ -1,5 +1,5 @@
-/* EVMC: Ethereum Client-VM Connector API.
- * Copyright 2019 The EVMC Authors.
+/* IVMC: Ethereum Client-VM Connector API.
+ * Copyright 2019 The IVMC Authors.
  * Licensed under the Apache License, Version 2.0.
  */
 
@@ -11,15 +11,15 @@ include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 // TODO: add `.derive_default(true)` to bindgen instead?
 
-impl Default for evmc_address {
+impl Default for ivmc_address {
     fn default() -> Self {
-        evmc_address { bytes: [0u8; 20] }
+        ivmc_address { bytes: [0u8; 20] }
     }
 }
 
-impl Default for evmc_bytes32 {
+impl Default for ivmc_bytes32 {
     fn default() -> Self {
-        evmc_bytes32 { bytes: [0u8; 32] }
+        ivmc_bytes32 { bytes: [0u8; 32] }
     }
 }
 
@@ -32,9 +32,9 @@ mod tests {
     #[test]
     fn container_new() {
         // TODO: add other checks from test/unittests/test_helpers.cpp
-        assert_eq!(size_of::<evmc_bytes32>(), 32);
-        assert_eq!(size_of::<evmc_address>(), 20);
-        assert!(size_of::<evmc_result>() <= 64);
-        assert!(size_of::<evmc_vm>() <= 64);
+        assert_eq!(size_of::<ivmc_bytes32>(), 32);
+        assert_eq!(size_of::<ivmc_address>(), 20);
+        assert!(size_of::<ivmc_result>() <= 64);
+        assert!(size_of::<ivmc_vm>() <= 64);
     }
 }

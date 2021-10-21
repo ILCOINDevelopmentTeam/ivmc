@@ -16,7 +16,7 @@ cache:
 install:
   - cmake --version
   - mkdir build && cd build
-  - cmake .. -G "Visual Studio 15 2017 Win64" -DEVMC_TESTING=ON -DCMAKE_INSTALL_PREFIX=$HOME
+  - cmake .. -G "Visual Studio 15 2017 Win64" -DIVMC_TESTING=ON -DCMAKE_INSTALL_PREFIX=$HOME
   - cmake --build . --config Release --target install
 
 script:

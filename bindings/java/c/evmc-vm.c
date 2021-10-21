@@ -1,81 +1,81 @@
-/* EVMC: Ethereum Client-VM Connector API.
- * Copyright 2019-2020 The EVMC Authors.
+/* IVMC: Ethereum Client-VM Connector API.
+ * Copyright 2019-2020 The IVMC Authors.
  * Licensed under the Apache License, Version 2.0.
  */
 
 #include "host.h"
-#include "org_ethereum_evmc_EvmcVm.h"
-#include <evmc/helpers.h>
-#include <evmc/loader.h>
+#include "org_ethereum_ivmc_EvmcVm.h"
+#include <ivmc/helpers.h>
+#include <ivmc/loader.h>
 
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
 
-JNIEXPORT jobject JNICALL Java_org_ethereum_evmc_EvmcVm_load_1and_1create(JNIEnv* jenv,
+JNIEXPORT jobject JNICALL Java_org_ethereum_ivmc_EvmcVm_load_1and_1create(JNIEnv* jenv,
                                                                           jclass jcls,
                                                                           jstring jfilename)
 {
     (void)jcls;
-    struct evmc_vm* evm = NULL;
-    jint rs = evmc_java_set_jvm(jenv);
+    struct ivmc_vm* evm = NULL;
+    jint rs = ivmc_java_set_jvm(jenv);
     (void)rs;
     assert(rs == JNI_OK);
     // load the EVM
     const char* filename = (*jenv)->GetStringUTFChars(jenv, jfilename, NULL);
     assert(filename != NULL);
-    enum evmc_loader_error_code loader_error;
-    evm = evmc_load_and_create(filename, &loader_error);
+    enum ivmc_loader_error_code loader_error;
+    evm = ivmc_load_and_create(filename, &loader_error);
     (*jenv)->ReleaseStringUTFChars(jenv, jfilename, filename);
-    if (loader_error != EVMC_LOADER_SUCCESS)
+    if (loader_error != IVMC_LOADER_SUCCESS)
     {
-        const char* error_msg = evmc_last_error_msg();
-        jclass exception_class = (*jenv)->FindClass(jenv, "org/ethereum/evmc/EvmcLoaderException");
+        const char* error_msg = ivmc_last_error_msg();
+        jclass exception_class = (*jenv)->FindClass(jenv, "org/ethereum/ivmc/EvmcLoaderException");
         assert(exception_class != NULL);
-        (*jenv)->ThrowNew(jenv, exception_class, error_msg ? error_msg : "Loading EVMC VM failed");
+        (*jenv)->ThrowNew(jenv, exception_class, error_msg ? error_msg : "Loading IVMC VM failed");
     }
-    jobject jresult = (*jenv)->NewDirectByteBuffer(jenv, (void*)evm, sizeof(struct evmc_vm));
+    jobject jresult = (*jenv)->NewDirectByteBuffer(jenv, (void*)evm, sizeof(struct ivmc_vm));
     assert(jresult != NULL);
     return jresult;
 }
 
-JNIEXPORT jint JNICALL Java_org_ethereum_evmc_EvmcVm_abi_1version(JNIEnv* jenv, jclass jcls)
+JNIEXPORT jint JNICALL Java_org_ethereum_ivmc_EvmcVm_abi_1version(JNIEnv* jenv, jclass jcls)
 {
     (void)jenv;
     (void)jcls;
-    return EVMC_ABI_VERSION;
+    return IVMC_ABI_VERSION;
 }
 
-JNIEXPORT jstring JNICALL Java_org_ethereum_evmc_EvmcVm_name(JNIEnv* jenv,
+JNIEXPORT jstring JNICALL Java_org_ethereum_ivmc_EvmcVm_name(JNIEnv* jenv,
                                                              jclass jcls,
                                                              jobject jevm)
 {
     (void)jcls;
-    struct evmc_vm* evm = (struct evmc_vm*)(*jenv)->GetDirectBufferAddress(jenv, jevm);
+    struct ivmc_vm* evm = (struct ivmc_vm*)(*jenv)->GetDirectBufferAddress(jenv, jevm);
     assert(evm != NULL);
-    const char* evm_name = evmc_vm_name(evm);
+    const char* evm_name = ivmc_vm_name(evm);
     return (*jenv)->NewStringUTF(jenv, evm_name);
 }
 
-JNIEXPORT jstring JNICALL Java_org_ethereum_evmc_EvmcVm_version(JNIEnv* jenv,
+JNIEXPORT jstring JNICALL Java_org_ethereum_ivmc_EvmcVm_version(JNIEnv* jenv,
                                                                 jclass jcls,
                                                                 jobject jevm)
 {
     (void)jcls;
-    struct evmc_vm* evm = (struct evmc_vm*)(*jenv)->GetDirectBufferAddress(jenv, jevm);
+    struct ivmc_vm* evm = (struct ivmc_vm*)(*jenv)->GetDirectBufferAddress(jenv, jevm);
     assert(evm != NULL);
-    const char* evm_version = evmc_vm_version(evm);
+    const char* evm_version = ivmc_vm_version(evm);
     return (*jenv)->NewStringUTF(jenv, evm_version);
 }
 
-JNIEXPORT void JNICALL Java_org_ethereum_evmc_EvmcVm_destroy(JNIEnv* jenv,
+JNIEXPORT void JNICALL Java_org_ethereum_ivmc_EvmcVm_destroy(JNIEnv* jenv,
                                                              jclass jcls,
                                                              jobject jevm)
 {
     (void)jcls;
-    struct evmc_vm* evm = (struct evmc_vm*)(*jenv)->GetDirectBufferAddress(jenv, jevm);
+    struct ivmc_vm* evm = (struct ivmc_vm*)(*jenv)->GetDirectBufferAddress(jenv, jevm);
     assert(evm != NULL);
-    evmc_destroy(evm);
+    ivmc_destroy(evm);
 }
 
 static jobject AllocateDirect(JNIEnv* jenv, size_t capacity)
@@ -92,7 +92,7 @@ static jobject AllocateDirect(JNIEnv* jenv, size_t capacity)
     return (*jenv)->CallStaticObjectMethod(jenv, jcls, method, capacity);
 }
 
-JNIEXPORT jobject JNICALL Java_org_ethereum_evmc_EvmcVm_execute(JNIEnv* jenv,
+JNIEXPORT jobject JNICALL Java_org_ethereum_ivmc_EvmcVm_execute(JNIEnv* jenv,
                                                                 jclass jcls,
                                                                 jobject jevm,
                                                                 jobject jcontext,
@@ -101,47 +101,47 @@ JNIEXPORT jobject JNICALL Java_org_ethereum_evmc_EvmcVm_execute(JNIEnv* jenv,
                                                                 jobject jcode)
 {
     (void)jcls;
-    struct evmc_message* msg = (struct evmc_message*)(*jenv)->GetDirectBufferAddress(jenv, jmsg);
+    struct ivmc_message* msg = (struct ivmc_message*)(*jenv)->GetDirectBufferAddress(jenv, jmsg);
     assert(msg != NULL);
     size_t code_size;
     const uint8_t* code = GetDirectBuffer(jenv, jcode, &code_size);
-    struct evmc_vm* evm = (struct evmc_vm*)(*jenv)->GetDirectBufferAddress(jenv, jevm);
+    struct ivmc_vm* evm = (struct ivmc_vm*)(*jenv)->GetDirectBufferAddress(jenv, jevm);
     assert(evm != NULL);
-    const struct evmc_host_interface* host = evmc_java_get_host_interface();
-    jobject jresult = AllocateDirect(jenv, sizeof(struct evmc_result));
+    const struct ivmc_host_interface* host = ivmc_java_get_host_interface();
+    jobject jresult = AllocateDirect(jenv, sizeof(struct ivmc_result));
     assert(jresult != NULL);
-    struct evmc_result* result =
-        (struct evmc_result*)(*jenv)->GetDirectBufferAddress(jenv, jresult);
+    struct ivmc_result* result =
+        (struct ivmc_result*)(*jenv)->GetDirectBufferAddress(jenv, jresult);
     assert(result != NULL);
-    *result = evmc_execute(evm, host, (struct evmc_host_context*)jcontext, (enum evmc_revision)jrev,
+    *result = ivmc_execute(evm, host, (struct ivmc_host_context*)jcontext, (enum ivmc_revision)jrev,
                            msg, code, code_size);
     return jresult;
 }
 
-JNIEXPORT jint JNICALL Java_org_ethereum_evmc_EvmcVm_get_1capabilities(JNIEnv* jenv,
+JNIEXPORT jint JNICALL Java_org_ethereum_ivmc_EvmcVm_get_1capabilities(JNIEnv* jenv,
                                                                        jclass jcls,
                                                                        jobject jevm)
 {
     (void)jcls;
-    struct evmc_vm* evm = (struct evmc_vm*)(*jenv)->GetDirectBufferAddress(jenv, jevm);
+    struct ivmc_vm* evm = (struct ivmc_vm*)(*jenv)->GetDirectBufferAddress(jenv, jevm);
     assert(evm != NULL);
     return (jint)evm->get_capabilities(evm);
 }
 
-JNIEXPORT jint JNICALL Java_org_ethereum_evmc_EvmcVm_set_1option(JNIEnv* jenv,
+JNIEXPORT jint JNICALL Java_org_ethereum_ivmc_EvmcVm_set_1option(JNIEnv* jenv,
                                                                  jclass jcls,
                                                                  jobject jevm,
                                                                  jstring jname,
                                                                  jstring jval)
 {
     (void)jcls;
-    struct evmc_vm* evm = (struct evmc_vm*)(*jenv)->GetDirectBufferAddress(jenv, jevm);
+    struct ivmc_vm* evm = (struct ivmc_vm*)(*jenv)->GetDirectBufferAddress(jenv, jevm);
     assert(evm != NULL);
     const char* name = (*jenv)->GetStringUTFChars(jenv, jname, 0);
     const char* value = (*jenv)->GetStringUTFChars(jenv, jval, 0);
     assert(name != NULL);
     assert(value != NULL);
-    enum evmc_set_option_result option_result = evmc_set_option(evm, name, value);
+    enum ivmc_set_option_result option_result = ivmc_set_option(evm, name, value);
     (*jenv)->ReleaseStringUTFChars(jenv, jname, name);
     (*jenv)->ReleaseStringUTFChars(jenv, jval, value);
     return (jint)option_result;

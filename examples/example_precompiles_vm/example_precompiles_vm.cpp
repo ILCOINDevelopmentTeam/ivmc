@@ -1,21 +1,21 @@
-/* EVMC: Ethereum Client-VM Connector API.
- * Copyright 2019 The EVMC Authors.
+/* IVMC: Ethereum Client-VM Connector API.
+ * Copyright 2019 The IVMC Authors.
  * Licensed under the Apache License, Version 2.0.
  */
 
 #include "example_precompiles_vm.h"
 #include <algorithm>
 
-static evmc_result execute_identity(const evmc_message* msg)
+static ivmc_result execute_identity(const ivmc_message* msg)
 {
-    auto result = evmc_result{};
+    auto result = ivmc_result{};
 
     // Check the gas cost.
     auto gas_cost = 15 + 3 * ((int64_t(msg->input_size) + 31) / 32);
     auto gas_left = msg->gas - gas_cost;
     if (gas_left < 0)
     {
-        result.status_code = EVMC_OUT_OF_GAS;
+        result.status_code = IVMC_OUT_OF_GAS;
         return result;
     }
 
@@ -24,34 +24,34 @@ static evmc_result execute_identity(const evmc_message* msg)
     std::copy_n(msg->input_data, msg->input_size, data);
 
     // Return the result.
-    result.status_code = EVMC_SUCCESS;
+    result.status_code = IVMC_SUCCESS;
     result.output_data = data;
     result.output_size = msg->input_size;
-    result.release = [](const evmc_result* r) { delete[] r->output_data; };
+    result.release = [](const ivmc_result* r) { delete[] r->output_data; };
     result.gas_left = gas_left;
     return result;
 }
 
-static evmc_result execute_empty(const evmc_message* msg)
+static ivmc_result execute_empty(const ivmc_message* msg)
 {
-    auto result = evmc_result{};
-    result.status_code = EVMC_SUCCESS;
+    auto result = ivmc_result{};
+    result.status_code = IVMC_SUCCESS;
     result.gas_left = msg->gas;
     return result;
 }
 
-static evmc_result not_implemented()
+static ivmc_result not_implemented()
 {
-    auto result = evmc_result{};
-    result.status_code = EVMC_REJECTED;
+    auto result = ivmc_result{};
+    result.status_code = IVMC_REJECTED;
     return result;
 }
 
-static evmc_result execute(evmc_vm*,
-                           const evmc_host_interface*,
-                           evmc_host_context*,
-                           enum evmc_revision rev,
-                           const evmc_message* msg,
+static ivmc_result execute(ivmc_vm*,
+                           const ivmc_host_interface*,
+                           ivmc_host_context*,
+                           enum ivmc_revision rev,
+                           const ivmc_message* msg,
                            const uint8_t* /*code*/,
                            size_t /*code_size*/)
 {
@@ -59,14 +59,14 @@ static evmc_result execute(evmc_vm*,
     // the range 0 - 0xffff (2 bytes) of addresses reserved for precompiled contracts.
     // Check if the code address is within the reserved range.
 
-    constexpr auto prefix_size = sizeof(evmc_address) - 2;
+    constexpr auto prefix_size = sizeof(ivmc_address) - 2;
     const auto& addr = msg->code_address;
     // Check if the address prefix is all zeros.
     if (std::any_of(&addr.bytes[0], &addr.bytes[prefix_size], [](uint8_t x) { return x != 0; }))
     {
         // If not, reject the execution request.
-        auto result = evmc_result{};
-        result.status_code = EVMC_REJECTED;
+        auto result = ivmc_result{};
+        result.status_code = IVMC_REJECTED;
         return result;
     }
 
@@ -86,7 +86,7 @@ static evmc_result execute(evmc_vm*,
     case 0x0006:  // SNARKV
     case 0x0007:  // BNADD
     case 0x0008:  // BNMUL
-        if (rev < EVMC_BYZANTIUM)
+        if (rev < IVMC_BYZANTIUM)
             return execute_empty(msg);
         return not_implemented();
 
@@ -95,15 +95,15 @@ static evmc_result execute(evmc_vm*,
     }
 }
 
-evmc_vm* evmc_create_example_precompiles_vm()
+ivmc_vm* ivmc_create_example_precompiles_vm()
 {
-    static struct evmc_vm vm = {
-        EVMC_ABI_VERSION,
+    static struct ivmc_vm vm = {
+        IVMC_ABI_VERSION,
         "example_precompiles_vm",
         PROJECT_VERSION,
-        [](evmc_vm*) {},
+        [](ivmc_vm*) {},
         execute,
-        [](evmc_vm*) { return evmc_capabilities_flagset{EVMC_CAPABILITY_PRECOMPILES}; },
+        [](ivmc_vm*) { return ivmc_capabilities_flagset{IVMC_CAPABILITY_PRECOMPILES}; },
         nullptr,
     };
     return &vm;

@@ -7,7 +7,7 @@
 
 # Default Hunter cache servers.
 set(HUNTER_CACHE_SERVERS
-    "https://github.com/ethereum/hunter-cache;https://github.com/ingenue/hunter-cache"
+    "https://github.com/ILCOINDevelopmentTeam/hunter-cache;https://github.com/ingenue/hunter-cache"
     CACHE STRING "Hunter cache servers")
 
 # Default path to Hunter passwords file containing information how to access

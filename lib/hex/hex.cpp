@@ -1,11 +1,11 @@
-// EVMC: Ethereum Client-VM Connector API.
-// Copyright 2021 The EVMC Authors.
+// IVMC: Ethereum Client-VM Connector API.
+// Copyright 2021 The IVMC Authors.
 // Licensed under the Apache License, Version 2.0.
 
-#include <evmc/hex.hpp>
+#include <ivmc/hex.hpp>
 #include <cctype>
 
-namespace evmc
+namespace ivmc
 {
 namespace
 {
@@ -119,4 +119,4 @@ std::string hex(bytes_view bs)
     return str;
 }
 
-}  // namespace evmc
+}  // namespace ivmc

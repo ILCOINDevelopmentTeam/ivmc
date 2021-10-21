@@ -1,15 +1,15 @@
-// EVMC: Ethereum Client-VM Connector API.
-// Copyright 2019-2020 The EVMC Authors.
+// IVMC: Ethereum Client-VM Connector API.
+// Copyright 2019-2020 The IVMC Authors.
 // Licensed under the Apache License, Version 2.0.
 
-#include <evmc/evmc.hpp>
-#include <evmc/hex.hpp>
-#include <evmc/mocked_host.hpp>
-#include <evmc/tooling.hpp>
+#include <ivmc/ivmc.hpp>
+#include <ivmc/hex.hpp>
+#include <ivmc/mocked_host.hpp>
+#include <ivmc/tooling.hpp>
 #include <chrono>
 #include <ostream>
 
-namespace evmc::tooling
+namespace ivmc::tooling
 {
 namespace
 {
@@ -20,11 +20,11 @@ constexpr auto create_address = 0xc9ea7ed000000000000000000000000000000001_addre
 constexpr auto create_gas = 10'000'000;
 
 auto bench(MockedHost& host,
-           evmc::VM& vm,
-           evmc_revision rev,
-           const evmc_message& msg,
+           ivmc::VM& vm,
+           ivmc_revision rev,
+           const ivmc_message& msg,
            bytes_view code,
-           const evmc::result& expected_result,
+           const ivmc::result& expected_result,
            std::ostream& out)
 {
     {
@@ -59,8 +59,8 @@ auto bench(MockedHost& host,
 }
 }  // namespace
 
-int run(evmc::VM& vm,
-        evmc_revision rev,
+int run(ivmc::VM& vm,
+        ivmc_revision rev,
         int64_t gas,
         const std::string& code_hex,
         const std::string& input_hex,
@@ -76,7 +76,7 @@ int run(evmc::VM& vm,
 
     MockedHost host;
 
-    evmc_message msg{};
+    ivmc_message msg{};
     msg.gas = gas;
     msg.input_data = input.data();
     msg.input_size = input.size();
@@ -84,13 +84,13 @@ int run(evmc::VM& vm,
     bytes_view exec_code = code;
     if (create)
     {
-        evmc_message create_msg{};
-        create_msg.kind = EVMC_CREATE;
+        ivmc_message create_msg{};
+        create_msg.kind = IVMC_CREATE;
         create_msg.recipient = create_address;
         create_msg.gas = create_gas;
 
         const auto create_result = vm.execute(host, rev, create_msg, code.data(), code.size());
-        if (create_result.status_code != EVMC_SUCCESS)
+        if (create_result.status_code != IVMC_SUCCESS)
         {
             out << "Contract creation failed: " << create_result.status_code << "\n";
             return create_result.status_code;
@@ -112,9 +112,9 @@ int run(evmc::VM& vm,
     const auto gas_used = msg.gas - result.gas_left;
     out << "Result:   " << result.status_code << "\nGas used: " << gas_used << "\n";
 
-    if (result.status_code == EVMC_SUCCESS || result.status_code == EVMC_REVERT)
+    if (result.status_code == IVMC_SUCCESS || result.status_code == IVMC_REVERT)
         out << "Output:   " << hex({result.output_data, result.output_size}) << "\n";
 
     return 0;
 }
-}  // namespace evmc::tooling
+}  // namespace ivmc::tooling

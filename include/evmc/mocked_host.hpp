@@ -1,15 +1,15 @@
-// EVMC: Ethereum Client-VM Connector API.
-// Copyright 2019 The EVMC Authors.
+// IVMC: Ethereum Client-VM Connector API.
+// Copyright 2019 The IVMC Authors.
 // Licensed under the Apache License, Version 2.0.
 #pragma once
 
-#include <evmc/evmc.hpp>
+#include <ivmc/ivmc.hpp>
 #include <algorithm>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-namespace evmc
+namespace ivmc
 {
 /// The string of bytes.
 using bytes = std::basic_string<uint8_t>;
@@ -24,7 +24,7 @@ struct storage_value
     bool dirty{false};
 
     /// Is the storage key cold or warm.
-    evmc_access_status access_status{EVMC_ACCESS_COLD};
+    ivmc_access_status access_status{IVMC_ACCESS_COLD};
 
     /// Default constructor.
     storage_value() noexcept = default;
@@ -35,7 +35,7 @@ struct storage_value
     {}
 
     /// Constructor with initial access status.
-    storage_value(const bytes32& _value, evmc_access_status _access_status) noexcept
+    storage_value(const bytes32& _value, ivmc_access_status _access_status) noexcept
       : value{_value}, access_status{_access_status}
     {}
 };
@@ -67,7 +67,7 @@ struct MockedAccount
     }
 };
 
-/// Mocked EVMC Host implementation.
+/// Mocked IVMC Host implementation.
 class MockedHost : public Host
 {
 public:
@@ -109,14 +109,14 @@ public:
     /// The set of all accounts in the Host, organized by their addresses.
     std::unordered_map<address, MockedAccount> accounts;
 
-    /// The EVMC transaction context to be returned by get_tx_context().
-    evmc_tx_context tx_context = {};
+    /// The IVMC transaction context to be returned by get_tx_context().
+    ivmc_tx_context tx_context = {};
 
     /// The block header hash value to be returned by get_block_hash().
     bytes32 block_hash = {};
 
     /// The call result to be returned by the call() method.
-    evmc_result call_result = {};
+    ivmc_result call_result = {};
 
     /// The record of all block numbers for which get_block_hash() was called.
     mutable std::vector<int64_t> recorded_blockhashes;
@@ -129,7 +129,7 @@ public:
     static constexpr auto max_recorded_account_accesses = 200;
 
     /// The record of all call messages requested in the call() method.
-    std::vector<evmc_message> recorded_calls;
+    std::vector<ivmc_message> recorded_calls;
 
     /// The maximum number of entries in recorded_calls record.
     /// This is arbitrary value useful in fuzzing when we don't want the record to explode.
@@ -157,14 +157,14 @@ private:
     }
 
 public:
-    /// Returns true if an account exists (EVMC Host method).
+    /// Returns true if an account exists (IVMC Host method).
     bool account_exists(const address& addr) const noexcept override
     {
         record_account_access(addr);
         return accounts.count(addr) != 0;
     }
 
-    /// Get the account's storage value at the given key (EVMC Host method).
+    /// Get the account's storage value at the given key (IVMC Host method).
     bytes32 get_storage(const address& addr, const bytes32& key) const noexcept override
     {
         record_account_access(addr);
@@ -179,8 +179,8 @@ public:
         return {};
     }
 
-    /// Set the account's storage value (EVMC Host method).
-    evmc_storage_status set_storage(const address& addr,
+    /// Set the account's storage value (IVMC Host method).
+    ivmc_storage_status set_storage(const address& addr,
                                     const bytes32& key,
                                     const bytes32& value) noexcept override
     {
@@ -196,27 +196,27 @@ public:
         // WARNING! This is not complete implementation as refund is not handled here.
 
         if (old.value == value)
-            return EVMC_STORAGE_UNCHANGED;
+            return IVMC_STORAGE_UNCHANGED;
 
-        evmc_storage_status status{};
+        ivmc_storage_status status{};
         if (!old.dirty)
         {
             old.dirty = true;
             if (!old.value)
-                status = EVMC_STORAGE_ADDED;
+                status = IVMC_STORAGE_ADDED;
             else if (value)
-                status = EVMC_STORAGE_MODIFIED;
+                status = IVMC_STORAGE_MODIFIED;
             else
-                status = EVMC_STORAGE_DELETED;
+                status = IVMC_STORAGE_DELETED;
         }
         else
-            status = EVMC_STORAGE_MODIFIED_AGAIN;
+            status = IVMC_STORAGE_MODIFIED_AGAIN;
 
         old.value = value;
         return status;
     }
 
-    /// Get the account's balance (EVMC Host method).
+    /// Get the account's balance (IVMC Host method).
     uint256be get_balance(const address& addr) const noexcept override
     {
         record_account_access(addr);
@@ -227,7 +227,7 @@ public:
         return it->second.balance;
     }
 
-    /// Get the account's code size (EVMC host method).
+    /// Get the account's code size (IVMC host method).
     size_t get_code_size(const address& addr) const noexcept override
     {
         record_account_access(addr);
@@ -237,7 +237,7 @@ public:
         return it->second.code.size();
     }
 
-    /// Get the account's code hash (EVMC host method).
+    /// Get the account's code hash (IVMC host method).
     bytes32 get_code_hash(const address& addr) const noexcept override
     {
         record_account_access(addr);
@@ -247,7 +247,7 @@ public:
         return it->second.codehash;
     }
 
-    /// Copy the account's code to the given buffer (EVMC host method).
+    /// Copy the account's code to the given buffer (IVMC host method).
     size_t copy_code(const address& addr,
                      size_t code_offset,
                      uint8_t* buffer_data,
@@ -270,15 +270,15 @@ public:
         return n;
     }
 
-    /// Selfdestruct the account (EVMC host method).
+    /// Selfdestruct the account (IVMC host method).
     void selfdestruct(const address& addr, const address& beneficiary) noexcept override
     {
         record_account_access(addr);
         recorded_selfdestructs.push_back({addr, beneficiary});
     }
 
-    /// Call/create other contract (EVMC host method).
-    result call(const evmc_message& msg) noexcept override
+    /// Call/create other contract (IVMC host method).
+    result call(const ivmc_message& msg) noexcept override
     {
         record_account_access(msg.recipient);
 
@@ -302,17 +302,17 @@ public:
         return result{call_result};
     }
 
-    /// Get transaction context (EVMC host method).
-    evmc_tx_context get_tx_context() const noexcept override { return tx_context; }
+    /// Get transaction context (IVMC host method).
+    ivmc_tx_context get_tx_context() const noexcept override { return tx_context; }
 
-    /// Get the block header hash (EVMC host method).
+    /// Get the block header hash (IVMC host method).
     bytes32 get_block_hash(int64_t block_number) const noexcept override
     {
         recorded_blockhashes.emplace_back(block_number);
         return block_hash;
     }
 
-    /// Emit LOG (EVMC host method).
+    /// Emit LOG (IVMC host method).
     void emit_log(const address& addr,
                   const uint8_t* data,
                   size_t data_size,
@@ -324,11 +324,11 @@ public:
 
     /// Record an account access.
     ///
-    /// This method is required by EIP-2929 introduced in ::EVMC_BERLIN. It will record the account
+    /// This method is required by EIP-2929 introduced in ::IVMC_BERLIN. It will record the account
     /// access in MockedHost::recorded_account_accesses and return previous access status.
-    /// This methods returns ::EVMC_ACCESS_WARM for known addresses of precompiles.
-    /// The EIP-2929 specifies that evmc_message::sender and evmc_message::recipient are always
-    /// ::EVMC_ACCESS_WARM. Therefore, you should init the MockedHost with:
+    /// This methods returns ::IVMC_ACCESS_WARM for known addresses of precompiles.
+    /// The EIP-2929 specifies that ivmc_message::sender and ivmc_message::recipient are always
+    /// ::IVMC_ACCESS_WARM. Therefore, you should init the MockedHost with:
     ///
     ///     mocked_host.access_account(msg.sender);
     ///     mocked_host.access_account(msg.recipient);
@@ -336,9 +336,9 @@ public:
     /// The same way you can mock transaction access list (EIP-2930) for account addresses.
     ///
     /// @param addr  The address of the accessed account.
-    /// @returns     The ::EVMC_ACCESS_WARM if the account has been accessed before,
-    ///              the ::EVMC_ACCESS_COLD otherwise.
-    evmc_access_status access_account(const address& addr) noexcept override
+    /// @returns     The ::IVMC_ACCESS_WARM if the account has been accessed before,
+    ///              the ::IVMC_ACCESS_COLD otherwise.
+    ivmc_access_status access_account(const address& addr) noexcept override
     {
         // Check if the address have been already accessed.
         const auto already_accessed =
@@ -350,30 +350,30 @@ public:
         // Accessing precompiled contracts is always warm.
         if (addr >= 0x0000000000000000000000000000000000000001_address &&
             addr <= 0x0000000000000000000000000000000000000009_address)
-            return EVMC_ACCESS_WARM;
+            return IVMC_ACCESS_WARM;
 
-        return already_accessed ? EVMC_ACCESS_WARM : EVMC_ACCESS_COLD;
+        return already_accessed ? IVMC_ACCESS_WARM : IVMC_ACCESS_COLD;
     }
 
     /// Access the account's storage value at the given key.
     ///
-    /// This method is required by EIP-2929 introduced in ::EVMC_BERLIN. In records that the given
+    /// This method is required by EIP-2929 introduced in ::IVMC_BERLIN. In records that the given
     /// account's storage key has been access and returns the previous access status.
     /// To mock storage access list (EIP-2930), you can pre-init account's storage values with
-    /// the ::EVMC_ACCESS_WARM flag:
+    /// the ::IVMC_ACCESS_WARM flag:
     ///
-    ///     mocked_host.accounts[msg.recipient].storage[key] = {value, EVMC_ACCESS_WARM};
+    ///     mocked_host.accounts[msg.recipient].storage[key] = {value, IVMC_ACCESS_WARM};
     ///
     /// @param addr  The account address.
     /// @param key   The account's storage key.
-    /// @return      The ::EVMC_ACCESS_WARM if the storage key has been accessed before,
-    ///              the ::EVMC_ACCESS_COLD otherwise.
-    evmc_access_status access_storage(const address& addr, const bytes32& key) noexcept override
+    /// @return      The ::IVMC_ACCESS_WARM if the storage key has been accessed before,
+    ///              the ::IVMC_ACCESS_COLD otherwise.
+    ivmc_access_status access_storage(const address& addr, const bytes32& key) noexcept override
     {
         auto& value = accounts[addr].storage[key];
         const auto access_status = value.access_status;
-        value.access_status = EVMC_ACCESS_WARM;
+        value.access_status = IVMC_ACCESS_WARM;
         return access_status;
     }
 };
-}  // namespace evmc
+}  // namespace ivmc

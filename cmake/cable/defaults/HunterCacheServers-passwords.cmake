@@ -6,7 +6,7 @@
 # Do not include directly.
 
 hunter_upload_password(
-    # REPO_OWNER + REPO = https://github.com/ethereum/hunter-cache
+    # REPO_OWNER + REPO = https://github.com/ILCOINDevelopmentTeam/hunter-cache
     REPO_OWNER ethereum
     REPO hunter-cache
 

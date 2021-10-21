@@ -1,5 +1,5 @@
-/* EVMC: Ethereum Client-VM Connector API.
- * Copyright 2019 The EVMC Authors.
+/* IVMC: Ethereum Client-VM Connector API.
+ * Copyright 2019 The IVMC Authors.
  * Licensed under the Apache License, Version 2.0.
  */
 
@@ -7,13 +7,13 @@ use crate::EvmcVm;
 
 use std::ops::Deref;
 
-/// Container struct for EVMC instances and user-defined data.
+/// Container struct for IVMC instances and user-defined data.
 pub struct EvmcContainer<T>
 where
     T: EvmcVm + Sized,
 {
     #[allow(dead_code)]
-    instance: ::evmc_sys::evmc_vm,
+    instance: ::ivmc_sys::ivmc_vm,
     vm: T,
 }
 
@@ -22,7 +22,7 @@ where
     T: EvmcVm + Sized,
 {
     /// Basic constructor.
-    pub fn new(_instance: ::evmc_sys::evmc_vm) -> Box<Self> {
+    pub fn new(_instance: ::ivmc_sys::ivmc_vm) -> Box<Self> {
         Box::new(Self {
             instance: _instance,
             vm: T::init(),
@@ -33,7 +33,7 @@ where
     ///
     /// # Safety
     /// This function expects a valid instance to be passed.
-    pub unsafe fn from_ffi_pointer(instance: *mut ::evmc_sys::evmc_vm) -> Box<Self> {
+    pub unsafe fn from_ffi_pointer(instance: *mut ::ivmc_sys::ivmc_vm) -> Box<Self> {
         assert!(!instance.is_null(), "from_ffi_pointer received NULL");
         Box::from_raw(instance as *mut EvmcContainer<T>)
     }
@@ -42,8 +42,8 @@ where
     ///
     /// # Safety
     /// This function will return a valid instance pointer.
-    pub unsafe fn into_ffi_pointer(boxed: Box<Self>) -> *mut ::evmc_sys::evmc_vm {
-        Box::into_raw(boxed) as *mut ::evmc_sys::evmc_vm
+    pub unsafe fn into_ffi_pointer(boxed: Box<Self>) -> *mut ::ivmc_sys::ivmc_vm {
+        Box::into_raw(boxed) as *mut ::ivmc_sys::ivmc_vm
     }
 }
 
@@ -72,7 +72,7 @@ mod tests {
         }
         fn execute(
             &self,
-            _revision: evmc_sys::evmc_revision,
+            _revision: ivmc_sys::ivmc_revision,
             _code: &[u8],
             _message: &ExecutionMessage,
             _context: Option<&mut ExecutionContext>,
@@ -82,9 +82,9 @@ mod tests {
     }
 
     unsafe extern "C" fn get_dummy_tx_context(
-        _context: *mut evmc_sys::evmc_host_context,
-    ) -> evmc_sys::evmc_tx_context {
-        evmc_sys::evmc_tx_context {
+        _context: *mut ivmc_sys::ivmc_host_context,
+    ) -> ivmc_sys::ivmc_tx_context {
+        ivmc_sys::ivmc_tx_context {
             tx_gas_price: Uint256::default(),
             tx_origin: Address::default(),
             block_coinbase: Address::default(),
@@ -99,8 +99,8 @@ mod tests {
 
     #[test]
     fn container_new() {
-        let instance = ::evmc_sys::evmc_vm {
-            abi_version: ::evmc_sys::EVMC_ABI_VERSION as i32,
+        let instance = ::ivmc_sys::ivmc_vm {
+            abi_version: ::ivmc_sys::IVMC_ABI_VERSION as i32,
             name: std::ptr::null(),
             version: std::ptr::null(),
             destroy: None,
@@ -111,22 +111,22 @@ mod tests {
 
         let code = [0u8; 0];
 
-        let message = ::evmc_sys::evmc_message {
-            kind: ::evmc_sys::evmc_call_kind::EVMC_CALL,
+        let message = ::ivmc_sys::ivmc_message {
+            kind: ::ivmc_sys::ivmc_call_kind::IVMC_CALL,
             flags: 0,
             depth: 0,
             gas: 0,
-            recipient: ::evmc_sys::evmc_address::default(),
-            sender: ::evmc_sys::evmc_address::default(),
+            recipient: ::ivmc_sys::ivmc_address::default(),
+            sender: ::ivmc_sys::ivmc_address::default(),
             input_data: std::ptr::null(),
             input_size: 0,
-            value: ::evmc_sys::evmc_uint256be::default(),
-            create2_salt: ::evmc_sys::evmc_bytes32::default(),
-            code_address: ::evmc_sys::evmc_address::default(),
+            value: ::ivmc_sys::ivmc_uint256be::default(),
+            create2_salt: ::ivmc_sys::ivmc_bytes32::default(),
+            code_address: ::ivmc_sys::ivmc_address::default(),
         };
         let message: ExecutionMessage = (&message).into();
 
-        let host = ::evmc_sys::evmc_host_interface {
+        let host = ::ivmc_sys::ivmc_host_interface {
             account_exists: None,
             get_storage: None,
             set_storage: None,
@@ -149,13 +149,13 @@ mod tests {
         assert_eq!(
             container
                 .execute(
-                    evmc_sys::evmc_revision::EVMC_PETERSBURG,
+                    ivmc_sys::ivmc_revision::IVMC_PETERSBURG,
                     &code,
                     &message,
                     Some(&mut context)
                 )
                 .status_code(),
-            ::evmc_sys::evmc_status_code::EVMC_FAILURE
+            ::ivmc_sys::ivmc_status_code::IVMC_FAILURE
         );
 
         let ptr = unsafe { EvmcContainer::into_ffi_pointer(container) };
@@ -165,13 +165,13 @@ mod tests {
         assert_eq!(
             container
                 .execute(
-                    evmc_sys::evmc_revision::EVMC_PETERSBURG,
+                    ivmc_sys::ivmc_revision::IVMC_PETERSBURG,
                     &code,
                     &message,
                     Some(&mut context)
                 )
                 .status_code(),
-            ::evmc_sys::evmc_status_code::EVMC_FAILURE
+            ::ivmc_sys::ivmc_status_code::IVMC_FAILURE
         );
     }
 }

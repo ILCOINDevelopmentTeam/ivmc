@@ -46,7 +46,7 @@ commands:
           name: "Configure"
           working_directory: ~/build
           command: |
-            cmake ../project <<#parameters.build_type>>-DCMAKE_BUILD_TYPE=<<parameters.build_type>><</parameters.build_type>> <<#parameters.toolchain>>-DCMAKE_TOOLCHAIN_FILE=~/project/cmake/cable/toolchains/<<parameters.toolchain>>.cmake<</parameters.toolchain>> -DCMAKE_INSTALL_PREFIX=~/install -DEVMC_TESTING=ON $CMAKE_OPTIONS
+            cmake ../project <<#parameters.build_type>>-DCMAKE_BUILD_TYPE=<<parameters.build_type>><</parameters.build_type>> <<#parameters.toolchain>>-DCMAKE_TOOLCHAIN_FILE=~/project/cmake/cable/toolchains/<<parameters.toolchain>>.cmake<</parameters.toolchain>> -DCMAKE_INSTALL_PREFIX=~/install -DIVMC_TESTING=ON $CMAKE_OPTIONS
       - save_cache:
           name: "Save Hunter Cache"
           key: *hunter-cache-key
@@ -64,15 +64,15 @@ commands:
             cmake --build ~/build --target package_source
             cmake --build ~/build --target package
             mkdir ~/package
-            mv ~/build/evmc-*.tar.gz ~/package
+            mv ~/build/ivmc-*.tar.gz ~/package
       - store_artifacts:
           path: ~/package
           destination: package
       - persist_to_workspace:
           root: ~/build
           paths:
-            - bin/evmc-vmtester
-            - bin/evmc-example
+            - bin/ivmc-vmtester
+            - bin/ivmc-example
 
   test:
     steps:
@@ -135,7 +135,7 @@ jobs:
             git config user.name "Documentation Bot"
             git add --all
             git commit -m "Update docs"
-            git push -f "https://$GITHUB_TOKEN@github.com/ethereum/evmc.git" HEAD:gh-pages
+            git push -f "https://$GITHUB_TOKEN@github.com/ethereum/ivmc.git" HEAD:gh-pages
 
   build-clang-coverage:
     executor: linux-clang-latest
@@ -149,15 +149,15 @@ jobs:
           working_directory: ~/build
           command: |
             find -name '*.profraw'
-            llvm-profdata merge *.profraw -o evmc.profdata
-            llvm-cov report -instr-profile evmc.profdata \
-              -object bin/evmc-unittests \
-              -object bin/evmc-vmtester
-            llvm-cov export -instr-profile evmc.profdata -format=lcov > evmc.lcov \
-              -object bin/evmc-unittests \
-              -object bin/evmc \
-              -object bin/evmc-vmtester
-            genhtml evmc.lcov -o coverage -t EVMC
+            llvm-profdata merge *.profraw -o ivmc.profdata
+            llvm-cov report -instr-profile ivmc.profdata \
+              -object bin/ivmc-unittests \
+              -object bin/ivmc-vmtester
+            llvm-cov export -instr-profile ivmc.profdata -format=lcov > ivmc.lcov \
+              -object bin/ivmc-unittests \
+              -object bin/ivmc \
+              -object bin/ivmc-vmtester
+            genhtml ivmc.lcov -o coverage -t IVMC
       - store_artifacts:
           path: ~/build/coverage
           destination: coverage
@@ -165,9 +165,9 @@ jobs:
           name: "Upload to Codecov"
           command: |
             # Convert to relative paths
-            sed -i 's|$(pwd)/||' ~/build/evmc.lcov
+            sed -i 's|$(pwd)/||' ~/build/ivmc.lcov
             sudo pip3 install --upgrade --quiet --no-cache-dir codecov==2.1.11
-            codecov --file ~/build/evmc.lcov -X gcov
+            codecov --file ~/build/ivmc.lcov -X gcov
 
 
   build-gcc8:
@@ -258,10 +258,10 @@ jobs:
       - run:
           name: "Go Build"
           command: |
-            go build -v ./bindings/go/evmc
-            go vet -v ./bindings/go/evmc
-            go generate -v ./bindings/go/evmc
-            go test -v ./bindings/go/evmc
+            go build -v ./bindings/go/ivmc
+            go vet -v ./bindings/go/ivmc
+            go generate -v ./bindings/go/ivmc
+            go test -v ./bindings/go/ivmc
       - run:
           name: "Go module integration test"
           working_directory: test/gomod
@@ -274,8 +274,8 @@ jobs:
             fi
             echo "version: $V"
 
-            go mod init evmc.ethereum.org/evmc_use
-            go get -v $(grep -o 'github.com/ethereum/evmc/v.*' ../../go.mod)@$V
+            go mod init ivmc.ethereum.org/ivmc_use
+            go get -v $(grep -o 'github.com/ethereum/ivmc/v.*' ../../go.mod)@$V
             go mod tidy -v
             go mod graph
             g++ -shared -I../../include ../../examples/example_vm/example_vm.cpp -o example-vm.so
@@ -292,7 +292,7 @@ jobs:
     docker:
       - image: circleci/openjdk:13-buster
     environment:
-      CMAKE_OPTIONS: -DEVMC_JAVA=ON
+      CMAKE_OPTIONS: -DIVMC_JAVA=ON
     steps:
       - run:
           name: "Install CMake"
@@ -337,17 +337,17 @@ jobs:
       - attach_workspace:
           at: ~/build
       - run:
-          name: Test with evmc-vmtester
+          name: Test with ivmc-vmtester
           command: |
-            ~/build/bin/evmc-vmtester target/debug/libexamplerustvm.so
+            ~/build/bin/ivmc-vmtester target/debug/libexamplerustvm.so
       - run:
-          name: Test with evmc-example
+          name: Test with ivmc-example
           command: |
-            ~/build/bin/evmc-example target/debug/libexamplerustvm.so
+            ~/build/bin/ivmc-example target/debug/libexamplerustvm.so
       - run:
-          name: Package evmc-sys
-          # NOTE: can not be run for evmc-vm and evmc-declare due to version dependencies
-          working_directory: bindings/rust/evmc-sys
+          name: Package ivmc-sys
+          # NOTE: can not be run for ivmc-vm and ivmc-declare due to version dependencies
+          working_directory: bindings/rust/ivmc-sys
           command: cargo package
 
   bindings-rust-asan:
@@ -370,17 +370,17 @@ jobs:
       - attach_workspace:
           at: ~/build
       - run:
-          name: Test with evmc-vmtester
+          name: Test with ivmc-vmtester
           command: |
-            ~/build/bin/evmc-vmtester target/x86_64-unknown-linux-gnu/debug/libexamplerustvm.so
+            ~/build/bin/ivmc-vmtester target/x86_64-unknown-linux-gnu/debug/libexamplerustvm.so
       - run:
-          name: Test with evmc-example
+          name: Test with ivmc-example
           command: |
-            ~/build/bin/evmc-example target/x86_64-unknown-linux-gnu/debug/libexamplerustvm.so
+            ~/build/bin/ivmc-example target/x86_64-unknown-linux-gnu/debug/libexamplerustvm.so
 
 workflows:
   version: 2
-  evmc:
+  ivmc:
     jobs:
       - lint
       - build-clang-coverage

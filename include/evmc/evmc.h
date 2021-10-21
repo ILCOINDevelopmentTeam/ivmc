@@ -1,15 +1,15 @@
 /**
- * EVMC: Ethereum Client-VM Connector API
+ * IVMC: Ethereum Client-VM Connector API
  *
  * @copyright
- * Copyright 2016-2019 The EVMC Authors.
+ * Copyright 2016-2019 The IVMC Authors.
  * Licensed under the Apache License, Version 2.0.
  *
- * @defgroup EVMC EVMC
+ * @defgroup IVMC IVMC
  * @{
  */
-#ifndef EVMC_H
-#define EVMC_H
+#ifndef IVMC_H
+#define IVMC_H
 
 #if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 6)
 /**
@@ -18,9 +18,9 @@
  * Available for clang and GCC 6+ compilers. The older GCC compilers know
  * this attribute, but it cannot be applied to enum elements.
  */
-#define EVMC_DEPRECATED __attribute__((deprecated))
+#define IVMC_DEPRECATED __attribute__((deprecated))
 #else
-#define EVMC_DEPRECATED
+#define IVMC_DEPRECATED
 #endif
 
 
@@ -37,14 +37,14 @@ extern "C" {
 enum
 {
     /**
-     * The EVMC ABI version number of the interface declared in this file.
+     * The IVMC ABI version number of the interface declared in this file.
      *
-     * The EVMC ABI version always equals the major version number of the EVMC project.
+     * The IVMC ABI version always equals the major version number of the IVMC project.
      * The Host SHOULD check if the ABI versions match when dynamically loading VMs.
      *
      * @see @ref versioning
      */
-    EVMC_ABI_VERSION = 10
+    IVMC_ABI_VERSION = 10
 };
 
 
@@ -53,39 +53,39 @@ enum
  *
  * 32 bytes of data capable of storing e.g. 256-bit hashes.
  */
-typedef struct evmc_bytes32
+typedef struct ivmc_bytes32
 {
     /** The 32 bytes. */
     uint8_t bytes[32];
-} evmc_bytes32;
+} ivmc_bytes32;
 
 /**
- * The alias for evmc_bytes32 to represent a big-endian 256-bit integer.
+ * The alias for ivmc_bytes32 to represent a big-endian 256-bit integer.
  */
-typedef struct evmc_bytes32 evmc_uint256be;
+typedef struct ivmc_bytes32 ivmc_uint256be;
 
 /** Big-endian 160-bit hash suitable for keeping an Ethereum address. */
-typedef struct evmc_address
+typedef struct ivmc_address
 {
     /** The 20 bytes of the hash. */
     uint8_t bytes[20];
-} evmc_address;
+} ivmc_address;
 
 /** The kind of call-like instruction. */
-enum evmc_call_kind
+enum ivmc_call_kind
 {
-    EVMC_CALL = 0,         /**< Request CALL. */
-    EVMC_DELEGATECALL = 1, /**< Request DELEGATECALL. Valid since Homestead.
+    IVMC_CALL = 0,         /**< Request CALL. */
+    IVMC_DELEGATECALL = 1, /**< Request DELEGATECALL. Valid since Homestead.
                                 The value param ignored. */
-    EVMC_CALLCODE = 2,     /**< Request CALLCODE. */
-    EVMC_CREATE = 3,       /**< Request CREATE. */
-    EVMC_CREATE2 = 4       /**< Request CREATE2. Valid since Constantinople.*/
+    IVMC_CALLCODE = 2,     /**< Request CALLCODE. */
+    IVMC_CREATE = 3,       /**< Request CREATE. */
+    IVMC_CREATE2 = 4       /**< Request CREATE2. Valid since Constantinople.*/
 };
 
-/** The flags for ::evmc_message. */
-enum evmc_flags
+/** The flags for ::ivmc_message. */
+enum ivmc_flags
 {
-    EVMC_STATIC = 1 /**< Static call mode. */
+    IVMC_STATIC = 1 /**< Static call mode. */
 };
 
 /**
@@ -93,14 +93,14 @@ enum evmc_flags
  *
  * Most of the fields are modelled by the section 8. Message Call of the Ethereum Yellow Paper.
  */
-struct evmc_message
+struct ivmc_message
 {
-    /** The kind of the call. For zero-depth calls ::EVMC_CALL SHOULD be used. */
-    enum evmc_call_kind kind;
+    /** The kind of the call. For zero-depth calls ::IVMC_CALL SHOULD be used. */
+    enum ivmc_call_kind kind;
 
     /**
      * Additional flags modifying the call execution behavior.
-     * In the current version the only valid values are ::EVMC_STATIC or 0.
+     * In the current version the only valid values are ::IVMC_STATIC or 0.
      */
     uint32_t flags;
 
@@ -122,24 +122,24 @@ struct evmc_message
      * The recipient of the message.
      *
      * This is the address of the account which storage/balance/nonce is going to be modified
-     * by the message execution. In case of ::EVMC_CALL, this is also the account where the
-     * message value evmc_message::value is going to be transferred.
-     * For ::EVMC_CALLCODE or ::EVMC_DELEGATECALL, this may be different from
-     * the evmc_message::code_address.
+     * by the message execution. In case of ::IVMC_CALL, this is also the account where the
+     * message value ivmc_message::value is going to be transferred.
+     * For ::IVMC_CALLCODE or ::IVMC_DELEGATECALL, this may be different from
+     * the ivmc_message::code_address.
      *
      * Defined as `r` in the Yellow Paper.
      */
-    evmc_address recipient;
+    ivmc_address recipient;
 
     /**
      * The sender of the message.
      *
      * The address of the sender of a message call defined as `s` in the Yellow Paper.
      * This must be the message recipient of the message at the previous (lower) depth,
-     * except for the ::EVMC_DELEGATECALL where recipient is the 2 levels above the present depth.
+     * except for the ::IVMC_DELEGATECALL where recipient is the 2 levels above the present depth.
      * At the depth 0 this must be the transaction origin.
      */
-    evmc_address sender;
+    ivmc_address sender;
 
     /**
      * The message input data.
@@ -160,56 +160,56 @@ struct evmc_message
     /**
      * The amount of Ether transferred with the message.
      *
-     * This is transferred value for ::EVMC_CALL or apparent value for ::EVMC_DELEGATECALL.
+     * This is transferred value for ::IVMC_CALL or apparent value for ::IVMC_DELEGATECALL.
      * Defined as `v` or `v~` in the Yellow Paper.
      */
-    evmc_uint256be value;
+    ivmc_uint256be value;
 
     /**
      * The optional value used in new contract address construction.
      *
-     * Needed only for a Host to calculate created address when kind is ::EVMC_CREATE2.
-     * Ignored in evmc_execute_fn().
+     * Needed only for a Host to calculate created address when kind is ::IVMC_CREATE2.
+     * Ignored in ivmc_execute_fn().
      */
-    evmc_bytes32 create2_salt;
+    ivmc_bytes32 create2_salt;
 
     /**
      * The address of the code to be executed.
      *
-     * For ::EVMC_CALLCODE or ::EVMC_DELEGATECALL this may be different from
-     * the evmc_message::recipient.
-     * Not required when invoking evmc_execute_fn(), only when invoking evmc_call_fn().
-     * Ignored if kind is ::EVMC_CREATE or ::EVMC_CREATE2.
+     * For ::IVMC_CALLCODE or ::IVMC_DELEGATECALL this may be different from
+     * the ivmc_message::recipient.
+     * Not required when invoking ivmc_execute_fn(), only when invoking ivmc_call_fn().
+     * Ignored if kind is ::IVMC_CREATE or ::IVMC_CREATE2.
      *
-     * In case of ::EVMC_CAPABILITY_PRECOMPILES implementation, this fields should be inspected
+     * In case of ::IVMC_CAPABILITY_PRECOMPILES implementation, this fields should be inspected
      * to identify the requested precompile.
      *
      * Defined as `c` in the Yellow Paper.
      */
-    evmc_address code_address;
+    ivmc_address code_address;
 };
 
 
 /** The transaction and block data for execution. */
-struct evmc_tx_context
+struct ivmc_tx_context
 {
-    evmc_uint256be tx_gas_price;     /**< The transaction gas price. */
-    evmc_address tx_origin;          /**< The transaction origin account. */
-    evmc_address block_coinbase;     /**< The miner of the block. */
+    ivmc_uint256be tx_gas_price;     /**< The transaction gas price. */
+    ivmc_address tx_origin;          /**< The transaction origin account. */
+    ivmc_address block_coinbase;     /**< The miner of the block. */
     int64_t block_number;            /**< The block number. */
     int64_t block_timestamp;         /**< The block timestamp. */
     int64_t block_gas_limit;         /**< The block gas limit. */
-    evmc_uint256be block_difficulty; /**< The block difficulty. */
-    evmc_uint256be chain_id;         /**< The blockchain's ChainID. */
-    evmc_uint256be block_base_fee;   /**< The block base fee per gas (EIP-1559, EIP-3198). */
+    ivmc_uint256be block_difficulty; /**< The block difficulty. */
+    ivmc_uint256be chain_id;         /**< The blockchain's ChainID. */
+    ivmc_uint256be block_base_fee;   /**< The block base fee per gas (EIP-1559, EIP-3198). */
 };
 
 /**
- * @struct evmc_host_context
+ * @struct ivmc_host_context
  * The opaque data type representing the Host execution context.
- * @see evmc_execute_fn().
+ * @see ivmc_execute_fn().
  */
-struct evmc_host_context;
+struct ivmc_host_context;
 
 /**
  * Get transaction context callback function.
@@ -220,7 +220,7 @@ struct evmc_host_context;
  *  @param      context  The pointer to the Host execution context.
  *  @return              The transaction context.
  */
-typedef struct evmc_tx_context (*evmc_get_tx_context_fn)(struct evmc_host_context* context);
+typedef struct ivmc_tx_context (*ivmc_get_tx_context_fn)(struct ivmc_host_context* context);
 
 /**
  * Get block hash callback function.
@@ -234,120 +234,120 @@ typedef struct evmc_tx_context (*evmc_get_tx_context_fn)(struct evmc_host_contex
  * @return         The block hash or null bytes
  *                 if the information about the block is not available.
  */
-typedef evmc_bytes32 (*evmc_get_block_hash_fn)(struct evmc_host_context* context, int64_t number);
+typedef ivmc_bytes32 (*ivmc_get_block_hash_fn)(struct ivmc_host_context* context, int64_t number);
 
 /**
  * The execution status code.
  *
- * Successful execution is represented by ::EVMC_SUCCESS having value 0.
+ * Successful execution is represented by ::IVMC_SUCCESS having value 0.
  *
  * Positive values represent failures defined by VM specifications with generic
- * ::EVMC_FAILURE code of value 1.
+ * ::IVMC_FAILURE code of value 1.
  *
  * Status codes with negative values represent VM internal errors
  * not provided by EVM specifications. These errors MUST not be passed back
  * to the caller. They MAY be handled by the Client in predefined manner
- * (see e.g. ::EVMC_REJECTED), otherwise internal errors are not recoverable.
- * The generic representant of errors is ::EVMC_INTERNAL_ERROR but
+ * (see e.g. ::IVMC_REJECTED), otherwise internal errors are not recoverable.
+ * The generic representant of errors is ::IVMC_INTERNAL_ERROR but
  * an EVM implementation MAY return negative status codes that are not defined
- * in the EVMC documentation.
+ * in the IVMC documentation.
  *
  * @note
  * In case new status codes are needed, please create an issue or pull request
- * in the EVMC repository (https://github.com/ethereum/evmc).
+ * in the IVMC repository (https://github.com/ILCOINDevelopmentTeam/ivmc).
  */
-enum evmc_status_code
+enum ivmc_status_code
 {
     /** Execution finished with success. */
-    EVMC_SUCCESS = 0,
+    IVMC_SUCCESS = 0,
 
     /** Generic execution failure. */
-    EVMC_FAILURE = 1,
+    IVMC_FAILURE = 1,
 
     /**
      * Execution terminated with REVERT opcode.
      *
      * In this case the amount of gas left MAY be non-zero and additional output
-     * data MAY be provided in ::evmc_result.
+     * data MAY be provided in ::ivmc_result.
      */
-    EVMC_REVERT = 2,
+    IVMC_REVERT = 2,
 
     /** The execution has run out of gas. */
-    EVMC_OUT_OF_GAS = 3,
+    IVMC_OUT_OF_GAS = 3,
 
     /**
      * The designated INVALID instruction has been hit during execution.
      *
-     * The EIP-141 (https://github.com/ethereum/EIPs/blob/master/EIPS/eip-141.md)
+     * The EIP-141 (https://github.com/ILCOINDevelopmentTeam/EIPs/blob/master/EIPS/eip-141.md)
      * defines the instruction 0xfe as INVALID instruction to indicate execution
      * abortion coming from high-level languages. This status code is reported
      * in case this INVALID instruction has been encountered.
      */
-    EVMC_INVALID_INSTRUCTION = 4,
+    IVMC_INVALID_INSTRUCTION = 4,
 
     /** An undefined instruction has been encountered. */
-    EVMC_UNDEFINED_INSTRUCTION = 5,
+    IVMC_UNDEFINED_INSTRUCTION = 5,
 
     /**
      * The execution has attempted to put more items on the EVM stack
      * than the specified limit.
      */
-    EVMC_STACK_OVERFLOW = 6,
+    IVMC_STACK_OVERFLOW = 6,
 
     /** Execution of an opcode has required more items on the EVM stack. */
-    EVMC_STACK_UNDERFLOW = 7,
+    IVMC_STACK_UNDERFLOW = 7,
 
     /** Execution has violated the jump destination restrictions. */
-    EVMC_BAD_JUMP_DESTINATION = 8,
+    IVMC_BAD_JUMP_DESTINATION = 8,
 
     /**
      * Tried to read outside memory bounds.
      *
      * An example is RETURNDATACOPY reading past the available buffer.
      */
-    EVMC_INVALID_MEMORY_ACCESS = 9,
+    IVMC_INVALID_MEMORY_ACCESS = 9,
 
     /** Call depth has exceeded the limit (if any) */
-    EVMC_CALL_DEPTH_EXCEEDED = 10,
+    IVMC_CALL_DEPTH_EXCEEDED = 10,
 
     /** Tried to execute an operation which is restricted in static mode. */
-    EVMC_STATIC_MODE_VIOLATION = 11,
+    IVMC_STATIC_MODE_VIOLATION = 11,
 
     /**
      * A call to a precompiled or system contract has ended with a failure.
      *
      * An example: elliptic curve functions handed invalid EC points.
      */
-    EVMC_PRECOMPILE_FAILURE = 12,
+    IVMC_PRECOMPILE_FAILURE = 12,
 
     /**
      * Contract validation has failed (e.g. due to EVM 1.5 jump validity,
      * Casper's purity checker or ewasm contract rules).
      */
-    EVMC_CONTRACT_VALIDATION_FAILURE = 13,
+    IVMC_CONTRACT_VALIDATION_FAILURE = 13,
 
     /**
      * An argument to a state accessing method has a value outside of the
      * accepted range of values.
      */
-    EVMC_ARGUMENT_OUT_OF_RANGE = 14,
+    IVMC_ARGUMENT_OUT_OF_RANGE = 14,
 
     /**
      * A WebAssembly `unreachable` instruction has been hit during execution.
      */
-    EVMC_WASM_UNREACHABLE_INSTRUCTION = 15,
+    IVMC_WASM_UNREACHABLE_INSTRUCTION = 15,
 
     /**
      * A WebAssembly trap has been hit during execution. This can be for many
      * reasons, including division by zero, validation errors, etc.
      */
-    EVMC_WASM_TRAP = 16,
+    IVMC_WASM_TRAP = 16,
 
     /** The caller does not have enough funds for value transfer. */
-    EVMC_INSUFFICIENT_BALANCE = 17,
+    IVMC_INSUFFICIENT_BALANCE = 17,
 
     /** EVM implementation generic internal error. */
-    EVMC_INTERNAL_ERROR = -1,
+    IVMC_INTERNAL_ERROR = -1,
 
     /**
      * The execution of the given code and/or message has been rejected
@@ -355,19 +355,19 @@ enum evmc_status_code
      *
      * This error SHOULD be used to signal that the EVM is not able to or
      * willing to execute the given code type or message.
-     * If an EVM returns the ::EVMC_REJECTED status code,
+     * If an EVM returns the ::IVMC_REJECTED status code,
      * the Client MAY try to execute it in other EVM implementation.
      * For example, the Client tries running a code in the EVM 1.5. If the
      * code is not supported there, the execution falls back to the EVM 1.0.
      */
-    EVMC_REJECTED = -2,
+    IVMC_REJECTED = -2,
 
     /** The VM failed to allocate the amount of memory needed for execution. */
-    EVMC_OUT_OF_MEMORY = -3
+    IVMC_OUT_OF_MEMORY = -3
 };
 
 /* Forward declaration. */
-struct evmc_result;
+struct ivmc_result;
 
 /**
  * Releases resources assigned to an execution result.
@@ -381,22 +381,22 @@ struct evmc_result;
  *                This MUST NOT be NULL.
  *
  * @note
- * The result is passed by pointer to avoid (shallow) copy of the ::evmc_result
+ * The result is passed by pointer to avoid (shallow) copy of the ::ivmc_result
  * struct. Think of this as the best possible C language approximation to
  * passing objects by reference.
  */
-typedef void (*evmc_release_result_fn)(const struct evmc_result* result);
+typedef void (*ivmc_release_result_fn)(const struct ivmc_result* result);
 
 /** The EVM code execution result. */
-struct evmc_result
+struct ivmc_result
 {
     /** The execution status code. */
-    enum evmc_status_code status_code;
+    enum ivmc_status_code status_code;
 
     /**
      * The amount of gas left after the execution.
      *
-     * If evmc_result::status_code is neither ::EVMC_SUCCESS nor ::EVMC_REVERT
+     * If ivmc_result::status_code is neither ::IVMC_SUCCESS nor ::IVMC_REVERT
      * the value MUST be 0.
      */
     int64_t gas_left;
@@ -404,11 +404,11 @@ struct evmc_result
     /**
      * The reference to output data.
      *
-     *  The output contains data coming from RETURN opcode (iff evmc_result::code
-     *  field is ::EVMC_SUCCESS) or from REVERT opcode.
+     *  The output contains data coming from RETURN opcode (iff ivmc_result::code
+     *  field is ::IVMC_SUCCESS) or from REVERT opcode.
      *
      *  The memory containing the output data is owned by EVM and has to be
-     *  freed with evmc_result::release().
+     *  freed with ivmc_result::release().
      *
      *  This MAY be NULL.
      */
@@ -431,7 +431,7 @@ struct evmc_result
      *
      * The suggested code pattern for releasing execution results:
      * @code
-     * struct evmc_result result = ...;
+     * struct ivmc_result result = ...;
      * if (result.release)
      *     result.release(&result);
      * @endcode
@@ -440,29 +440,29 @@ struct evmc_result
      * It works similarly to C++ virtual destructor. Attaching the release
      * function to the result itself allows VM composition.
      */
-    evmc_release_result_fn release;
+    ivmc_release_result_fn release;
 
     /**
      * The address of the contract created by create instructions.
      *
      * This field has valid value only if:
-     * - it is a result of the Host method evmc_host_interface::call
+     * - it is a result of the Host method ivmc_host_interface::call
      * - and the result describes successful contract creation
-     *   (evmc_result::status_code is ::EVMC_SUCCESS).
+     *   (ivmc_result::status_code is ::IVMC_SUCCESS).
      * In all other cases the address MUST be null bytes.
      */
-    evmc_address create_address;
+    ivmc_address create_address;
 
     /**
-     * Reserved data that MAY be used by a evmc_result object creator.
+     * Reserved data that MAY be used by a ivmc_result object creator.
      *
      *  This reserved 4 bytes together with 20 bytes from create_address form
-     *  24 bytes of memory called "optional data" within evmc_result struct
-     *  to be optionally used by the evmc_result object creator.
+     *  24 bytes of memory called "optional data" within ivmc_result struct
+     *  to be optionally used by the ivmc_result object creator.
      *
-     *  @see evmc_result_optional_data, evmc_get_optional_data().
+     *  @see ivmc_result_optional_data, ivmc_get_optional_data().
      *
-     *  Also extends the size of the evmc_result to 64 bytes (full cache line).
+     *  Also extends the size of the ivmc_result to 64 bytes (full cache line).
      */
     uint8_t padding[4];
 };
@@ -477,8 +477,8 @@ struct evmc_result
  * @param address  The address of the account the query is about.
  * @return         true if exists, false otherwise.
  */
-typedef bool (*evmc_account_exists_fn)(struct evmc_host_context* context,
-                                       const evmc_address* address);
+typedef bool (*ivmc_account_exists_fn)(struct ivmc_host_context* context,
+                                       const ivmc_address* address);
 
 /**
  * Get storage callback function.
@@ -491,9 +491,9 @@ typedef bool (*evmc_account_exists_fn)(struct evmc_host_context* context,
  * @return         The storage value at the given storage key or null bytes
  *                 if the account does not exist.
  */
-typedef evmc_bytes32 (*evmc_get_storage_fn)(struct evmc_host_context* context,
-                                            const evmc_address* address,
-                                            const evmc_bytes32* key);
+typedef ivmc_bytes32 (*ivmc_get_storage_fn)(struct ivmc_host_context* context,
+                                            const ivmc_address* address,
+                                            const ivmc_bytes32* key);
 
 
 /**
@@ -507,32 +507,32 @@ typedef evmc_bytes32 (*evmc_get_storage_fn)(struct evmc_host_context* context,
  * - Z != Y (Z is any value other than Y),
  * - the "->" means the change from one value to another.
  */
-enum evmc_storage_status
+enum ivmc_storage_status
 {
     /**
      * The value of a storage item has been left unchanged: 0 -> 0 and X -> X.
      */
-    EVMC_STORAGE_UNCHANGED = 0,
+    IVMC_STORAGE_UNCHANGED = 0,
 
     /**
      * The value of a storage item has been modified: X -> Y.
      */
-    EVMC_STORAGE_MODIFIED = 1,
+    IVMC_STORAGE_MODIFIED = 1,
 
     /**
      * A storage item has been modified after being modified before: X -> Y -> Z.
      */
-    EVMC_STORAGE_MODIFIED_AGAIN = 2,
+    IVMC_STORAGE_MODIFIED_AGAIN = 2,
 
     /**
      * A new storage item has been added: 0 -> X.
      */
-    EVMC_STORAGE_ADDED = 3,
+    IVMC_STORAGE_ADDED = 3,
 
     /**
      * A storage item has been deleted: X -> 0.
      */
-    EVMC_STORAGE_DELETED = 4
+    IVMC_STORAGE_DELETED = 4
 };
 
 
@@ -542,7 +542,7 @@ enum evmc_storage_status
  * This callback function is used by a VM to update the given account storage entry.
  * The VM MUST make sure that the account exists. This requirement is only a formality because
  * VM implementations only modify storage of the account of the current execution context
- * (i.e. referenced by evmc_message::recipient).
+ * (i.e. referenced by ivmc_message::recipient).
  *
  * @param context  The pointer to the Host execution context.
  * @param address  The address of the account.
@@ -550,10 +550,10 @@ enum evmc_storage_status
  * @param value    The value to be stored.
  * @return         The effect on the storage item.
  */
-typedef enum evmc_storage_status (*evmc_set_storage_fn)(struct evmc_host_context* context,
-                                                        const evmc_address* address,
-                                                        const evmc_bytes32* key,
-                                                        const evmc_bytes32* value);
+typedef enum ivmc_storage_status (*ivmc_set_storage_fn)(struct ivmc_host_context* context,
+                                                        const ivmc_address* address,
+                                                        const ivmc_bytes32* key,
+                                                        const ivmc_bytes32* value);
 
 /**
  * Get balance callback function.
@@ -564,8 +564,8 @@ typedef enum evmc_storage_status (*evmc_set_storage_fn)(struct evmc_host_context
  * @param address  The address of the account.
  * @return         The balance of the given account or 0 if the account does not exist.
  */
-typedef evmc_uint256be (*evmc_get_balance_fn)(struct evmc_host_context* context,
-                                              const evmc_address* address);
+typedef ivmc_uint256be (*ivmc_get_balance_fn)(struct ivmc_host_context* context,
+                                              const ivmc_address* address);
 
 /**
  * Get code size callback function.
@@ -577,8 +577,8 @@ typedef evmc_uint256be (*evmc_get_balance_fn)(struct evmc_host_context* context,
  * @param address  The address of the account.
  * @return         The size of the code in the account or 0 if the account does not exist.
  */
-typedef size_t (*evmc_get_code_size_fn)(struct evmc_host_context* context,
-                                        const evmc_address* address);
+typedef size_t (*ivmc_get_code_size_fn)(struct ivmc_host_context* context,
+                                        const ivmc_address* address);
 
 /**
  * Get code hash callback function.
@@ -591,8 +591,8 @@ typedef size_t (*evmc_get_code_size_fn)(struct evmc_host_context* context,
  * @param address  The address of the account.
  * @return         The hash of the code in the account or null bytes if the account does not exist.
  */
-typedef evmc_bytes32 (*evmc_get_code_hash_fn)(struct evmc_host_context* context,
-                                              const evmc_address* address);
+typedef ivmc_bytes32 (*ivmc_get_code_hash_fn)(struct ivmc_host_context* context,
+                                              const ivmc_address* address);
 
 /**
  * Copy code callback function.
@@ -603,7 +603,7 @@ typedef evmc_bytes32 (*evmc_get_code_hash_fn)(struct evmc_host_context* context,
  * to the provided memory buffer up to the size of the buffer or the size of
  * the code, whichever is smaller.
  *
- * @param context      The pointer to the Host execution context. See ::evmc_host_context.
+ * @param context      The pointer to the Host execution context. See ::ivmc_host_context.
  * @param address      The address of the account.
  * @param code_offset  The offset of the code to copy.
  * @param buffer_data  The pointer to the memory buffer allocated by the EVM
@@ -611,8 +611,8 @@ typedef evmc_bytes32 (*evmc_get_code_hash_fn)(struct evmc_host_context* context,
  * @param buffer_size  The size of the memory buffer.
  * @return             The number of bytes copied to the buffer by the Client.
  */
-typedef size_t (*evmc_copy_code_fn)(struct evmc_host_context* context,
-                                    const evmc_address* address,
+typedef size_t (*ivmc_copy_code_fn)(struct ivmc_host_context* context,
+                                    const ivmc_address* address,
                                     size_t code_offset,
                                     uint8_t* buffer_data,
                                     size_t buffer_size);
@@ -623,13 +623,13 @@ typedef size_t (*evmc_copy_code_fn)(struct evmc_host_context* context,
  * This callback function is used by an EVM to SELFDESTRUCT given contract.
  * The execution of the contract will not be stopped, that is up to the EVM.
  *
- * @param context      The pointer to the Host execution context. See ::evmc_host_context.
+ * @param context      The pointer to the Host execution context. See ::ivmc_host_context.
  * @param address      The address of the contract to be selfdestructed.
  * @param beneficiary  The address where the remaining ETH is going to be transferred.
  */
-typedef void (*evmc_selfdestruct_fn)(struct evmc_host_context* context,
-                                     const evmc_address* address,
-                                     const evmc_address* beneficiary);
+typedef void (*ivmc_selfdestruct_fn)(struct ivmc_host_context* context,
+                                     const ivmc_address* address,
+                                     const ivmc_address* beneficiary);
 
 /**
  * Log callback function.
@@ -637,34 +637,34 @@ typedef void (*evmc_selfdestruct_fn)(struct evmc_host_context* context,
  * This callback function is used by an EVM to inform about a LOG that happened
  * during an EVM bytecode execution.
  *
- * @param context       The pointer to the Host execution context. See ::evmc_host_context.
+ * @param context       The pointer to the Host execution context. See ::ivmc_host_context.
  * @param address       The address of the contract that generated the log.
  * @param data          The pointer to unindexed data attached to the log.
  * @param data_size     The length of the data.
  * @param topics        The pointer to the array of topics attached to the log.
  * @param topics_count  The number of the topics. Valid values are between 0 and 4 inclusively.
  */
-typedef void (*evmc_emit_log_fn)(struct evmc_host_context* context,
-                                 const evmc_address* address,
+typedef void (*ivmc_emit_log_fn)(struct ivmc_host_context* context,
+                                 const ivmc_address* address,
                                  const uint8_t* data,
                                  size_t data_size,
-                                 const evmc_bytes32 topics[],
+                                 const ivmc_bytes32 topics[],
                                  size_t topics_count);
 
 /**
  * Access status per EIP-2929: Gas cost increases for state access opcodes.
  */
-enum evmc_access_status
+enum ivmc_access_status
 {
     /**
      * The entry hasn't been accessed before – it's the first access.
      */
-    EVMC_ACCESS_COLD = 0,
+    IVMC_ACCESS_COLD = 0,
 
     /**
      * The entry is already in accessed_addresses or accessed_storage_keys.
      */
-    EVMC_ACCESS_WARM = 1
+    IVMC_ACCESS_WARM = 1
 };
 
 /**
@@ -675,11 +675,11 @@ enum evmc_access_status
  *
  * @param context  The Host execution context.
  * @param address  The address of the account.
- * @return         EVMC_ACCESS_WARM if accessed_addresses already contained the address
- *                 or EVMC_ACCESS_COLD otherwise.
+ * @return         IVMC_ACCESS_WARM if accessed_addresses already contained the address
+ *                 or IVMC_ACCESS_COLD otherwise.
  */
-typedef enum evmc_access_status (*evmc_access_account_fn)(struct evmc_host_context* context,
-                                                          const evmc_address* address);
+typedef enum ivmc_access_status (*ivmc_access_account_fn)(struct ivmc_host_context* context,
+                                                          const ivmc_address* address);
 
 /**
  * Access storage callback function.
@@ -690,12 +690,12 @@ typedef enum evmc_access_status (*evmc_access_account_fn)(struct evmc_host_conte
  * @param context  The Host execution context.
  * @param address  The address of the account.
  * @param key      The index of the account's storage entry.
- * @return         EVMC_ACCESS_WARM if accessed_storage_keys already contained the key
- *                 or EVMC_ACCESS_COLD otherwise.
+ * @return         IVMC_ACCESS_WARM if accessed_storage_keys already contained the key
+ *                 or IVMC_ACCESS_COLD otherwise.
  */
-typedef enum evmc_access_status (*evmc_access_storage_fn)(struct evmc_host_context* context,
-                                                          const evmc_address* address,
-                                                          const evmc_bytes32* key);
+typedef enum ivmc_access_status (*ivmc_access_storage_fn)(struct ivmc_host_context* context,
+                                                          const ivmc_address* address,
+                                                          const ivmc_bytes32* key);
 
 /**
  * Pointer to the callback function supporting EVM calls.
@@ -704,8 +704,8 @@ typedef enum evmc_access_status (*evmc_access_storage_fn)(struct evmc_host_conte
  * @param msg      The call parameters.
  * @return         The result of the call.
  */
-typedef struct evmc_result (*evmc_call_fn)(struct evmc_host_context* context,
-                                           const struct evmc_message* msg);
+typedef struct ivmc_result (*ivmc_call_fn)(struct ivmc_host_context* context,
+                                           const struct ivmc_message* msg);
 
 /**
  * The Host interface.
@@ -715,70 +715,70 @@ typedef struct evmc_result (*evmc_call_fn)(struct evmc_host_context* context,
  * Host implementations SHOULD create constant singletons of this (similarly
  * to vtables) to lower the maintenance and memory management cost.
  */
-struct evmc_host_interface
+struct ivmc_host_interface
 {
     /** Check account existence callback function. */
-    evmc_account_exists_fn account_exists;
+    ivmc_account_exists_fn account_exists;
 
     /** Get storage callback function. */
-    evmc_get_storage_fn get_storage;
+    ivmc_get_storage_fn get_storage;
 
     /** Set storage callback function. */
-    evmc_set_storage_fn set_storage;
+    ivmc_set_storage_fn set_storage;
 
     /** Get balance callback function. */
-    evmc_get_balance_fn get_balance;
+    ivmc_get_balance_fn get_balance;
 
     /** Get code size callback function. */
-    evmc_get_code_size_fn get_code_size;
+    ivmc_get_code_size_fn get_code_size;
 
     /** Get code hash callback function. */
-    evmc_get_code_hash_fn get_code_hash;
+    ivmc_get_code_hash_fn get_code_hash;
 
     /** Copy code callback function. */
-    evmc_copy_code_fn copy_code;
+    ivmc_copy_code_fn copy_code;
 
     /** Selfdestruct callback function. */
-    evmc_selfdestruct_fn selfdestruct;
+    ivmc_selfdestruct_fn selfdestruct;
 
     /** Call callback function. */
-    evmc_call_fn call;
+    ivmc_call_fn call;
 
     /** Get transaction context callback function. */
-    evmc_get_tx_context_fn get_tx_context;
+    ivmc_get_tx_context_fn get_tx_context;
 
     /** Get block hash callback function. */
-    evmc_get_block_hash_fn get_block_hash;
+    ivmc_get_block_hash_fn get_block_hash;
 
     /** Emit log callback function. */
-    evmc_emit_log_fn emit_log;
+    ivmc_emit_log_fn emit_log;
 
     /** Access account callback function. */
-    evmc_access_account_fn access_account;
+    ivmc_access_account_fn access_account;
 
     /** Access storage callback function. */
-    evmc_access_storage_fn access_storage;
+    ivmc_access_storage_fn access_storage;
 };
 
 
 /* Forward declaration. */
-struct evmc_vm;
+struct ivmc_vm;
 
 /**
  * Destroys the VM instance.
  *
  * @param vm  The VM instance to be destroyed.
  */
-typedef void (*evmc_destroy_fn)(struct evmc_vm* vm);
+typedef void (*ivmc_destroy_fn)(struct ivmc_vm* vm);
 
 /**
- * Possible outcomes of evmc_set_option.
+ * Possible outcomes of ivmc_set_option.
  */
-enum evmc_set_option_result
+enum ivmc_set_option_result
 {
-    EVMC_SET_OPTION_SUCCESS = 0,
-    EVMC_SET_OPTION_INVALID_NAME = 1,
-    EVMC_SET_OPTION_INVALID_VALUE = 2
+    IVMC_SET_OPTION_SUCCESS = 0,
+    IVMC_SET_OPTION_INVALID_NAME = 1,
+    IVMC_SET_OPTION_INVALID_VALUE = 2
 };
 
 /**
@@ -794,7 +794,7 @@ enum evmc_set_option_result
  * @param value  The new option value. NULL-terminated string. Cannot be NULL.
  * @return       The outcome of the operation.
  */
-typedef enum evmc_set_option_result (*evmc_set_option_fn)(struct evmc_vm* vm,
+typedef enum ivmc_set_option_result (*ivmc_set_option_fn)(struct ivmc_vm* vm,
                                                           char const* name,
                                                           char const* value);
 
@@ -805,49 +805,49 @@ typedef enum evmc_set_option_result (*evmc_set_option_fn)(struct evmc_vm* vm,
  * The revision of the EVM specification based on the Ethereum
  * upgrade / hard fork codenames.
  */
-enum evmc_revision
+enum ivmc_revision
 {
     /**
      * The Frontier revision.
      *
      * The one Ethereum launched with.
      */
-    EVMC_FRONTIER = 0,
+    IVMC_FRONTIER = 0,
 
     /**
      * The Homestead revision.
      *
      * https://eips.ethereum.org/EIPS/eip-606
      */
-    EVMC_HOMESTEAD = 1,
+    IVMC_HOMESTEAD = 1,
 
     /**
      * The Tangerine Whistle revision.
      *
      * https://eips.ethereum.org/EIPS/eip-608
      */
-    EVMC_TANGERINE_WHISTLE = 2,
+    IVMC_TANGERINE_WHISTLE = 2,
 
     /**
      * The Spurious Dragon revision.
      *
      * https://eips.ethereum.org/EIPS/eip-607
      */
-    EVMC_SPURIOUS_DRAGON = 3,
+    IVMC_SPURIOUS_DRAGON = 3,
 
     /**
      * The Byzantium revision.
      *
      * https://eips.ethereum.org/EIPS/eip-609
      */
-    EVMC_BYZANTIUM = 4,
+    IVMC_BYZANTIUM = 4,
 
     /**
      * The Constantinople revision.
      *
      * https://eips.ethereum.org/EIPS/eip-1013
      */
-    EVMC_CONSTANTINOPLE = 5,
+    IVMC_CONSTANTINOPLE = 5,
 
     /**
      * The Petersburg revision.
@@ -856,45 +856,45 @@ enum evmc_revision
      *
      * https://eips.ethereum.org/EIPS/eip-1716
      */
-    EVMC_PETERSBURG = 6,
+    IVMC_PETERSBURG = 6,
 
     /**
      * The Istanbul revision.
      *
      * https://eips.ethereum.org/EIPS/eip-1679
      */
-    EVMC_ISTANBUL = 7,
+    IVMC_ISTANBUL = 7,
 
     /**
      * The Berlin revision.
      *
-     * https://github.com/ethereum/eth1.0-specs/blob/master/network-upgrades/mainnet-upgrades/berlin.md
+     * https://github.com/ILCOINDevelopmentTeam/eth1.0-specs/blob/master/network-upgrades/mainnet-upgrades/berlin.md
      */
-    EVMC_BERLIN = 8,
+    IVMC_BERLIN = 8,
 
     /**
      * The London revision.
      *
-     * https://github.com/ethereum/eth1.0-specs/blob/master/network-upgrades/mainnet-upgrades/london.md
+     * https://github.com/ILCOINDevelopmentTeam/eth1.0-specs/blob/master/network-upgrades/mainnet-upgrades/london.md
      */
-    EVMC_LONDON = 9,
+    IVMC_LONDON = 9,
 
     /**
      * The Shanghai revision.
      *
-     * https://github.com/ethereum/eth1.0-specs/blob/master/network-upgrades/mainnet-upgrades/shanghai.md
+     * https://github.com/ILCOINDevelopmentTeam/eth1.0-specs/blob/master/network-upgrades/mainnet-upgrades/shanghai.md
      */
-    EVMC_SHANGHAI = 10,
+    IVMC_SHANGHAI = 10,
 
     /** The maximum EVM revision supported. */
-    EVMC_MAX_REVISION = EVMC_SHANGHAI,
+    IVMC_MAX_REVISION = IVMC_SHANGHAI,
 
     /**
      * The latest known EVM revision with finalized specification.
      *
      * This is handy for EVM tools to always use the latest revision available.
      */
-    EVMC_LATEST_STABLE_REVISION = EVMC_LONDON
+    IVMC_LATEST_STABLE_REVISION = IVMC_LONDON
 };
 
 
@@ -905,39 +905,39 @@ enum evmc_revision
  *
  * @param vm         The VM instance. This argument MUST NOT be NULL.
  * @param host       The Host interface. This argument MUST NOT be NULL unless
- *                   the @p vm has the ::EVMC_CAPABILITY_PRECOMPILES capability.
+ *                   the @p vm has the ::IVMC_CAPABILITY_PRECOMPILES capability.
  * @param context    The opaque pointer to the Host execution context.
  *                   This argument MAY be NULL. The VM MUST pass the same
  *                   pointer to the methods of the @p host interface.
  *                   The VM MUST NOT dereference the pointer.
  * @param rev        The requested EVM specification revision.
- * @param msg        The call parameters. See ::evmc_message. This argument MUST NOT be NULL.
+ * @param msg        The call parameters. See ::ivmc_message. This argument MUST NOT be NULL.
  * @param code       The reference to the code to be executed. This argument MAY be NULL.
  * @param code_size  The length of the code. If @p code is NULL this argument MUST be 0.
  * @return           The execution result.
  */
-typedef struct evmc_result (*evmc_execute_fn)(struct evmc_vm* vm,
-                                              const struct evmc_host_interface* host,
-                                              struct evmc_host_context* context,
-                                              enum evmc_revision rev,
-                                              const struct evmc_message* msg,
+typedef struct ivmc_result (*ivmc_execute_fn)(struct ivmc_vm* vm,
+                                              const struct ivmc_host_interface* host,
+                                              struct ivmc_host_context* context,
+                                              enum ivmc_revision rev,
+                                              const struct ivmc_message* msg,
                                               uint8_t const* code,
                                               size_t code_size);
 
 /**
  * Possible capabilities of a VM.
  */
-enum evmc_capabilities
+enum ivmc_capabilities
 {
     /**
      * The VM is capable of executing EVM1 bytecode.
      */
-    EVMC_CAPABILITY_EVM1 = (1u << 0),
+    IVMC_CAPABILITY_EVM1 = (1u << 0),
 
     /**
      * The VM is capable of executing ewasm bytecode.
      */
-    EVMC_CAPABILITY_EWASM = (1u << 1),
+    IVMC_CAPABILITY_EWASM = (1u << 1),
 
     /**
      * The VM is capable of executing the precompiled contracts
@@ -949,26 +949,26 @@ enum evmc_capabilities
      *
      * This capability is **experimental** and MAY be removed without notice.
      */
-    EVMC_CAPABILITY_PRECOMPILES = (1u << 2)
+    IVMC_CAPABILITY_PRECOMPILES = (1u << 2)
 };
 
 /**
- * Alias for unsigned integer representing a set of bit flags of EVMC capabilities.
+ * Alias for unsigned integer representing a set of bit flags of IVMC capabilities.
  *
- * @see evmc_capabilities
+ * @see ivmc_capabilities
  */
-typedef uint32_t evmc_capabilities_flagset;
+typedef uint32_t ivmc_capabilities_flagset;
 
 /**
  * Return the supported capabilities of the VM instance.
  *
  * This function MAY be invoked multiple times for a single VM instance,
- * and its value MAY be influenced by calls to evmc_vm::set_option.
+ * and its value MAY be influenced by calls to ivmc_vm::set_option.
  *
  * @param vm  The VM instance.
- * @return    The supported capabilities of the VM. @see evmc_capabilities.
+ * @return    The supported capabilities of the VM. @see ivmc_capabilities.
  */
-typedef evmc_capabilities_flagset (*evmc_get_capabilities_fn)(struct evmc_vm* vm);
+typedef ivmc_capabilities_flagset (*ivmc_get_capabilities_fn)(struct ivmc_vm* vm);
 
 
 /**
@@ -976,18 +976,18 @@ typedef evmc_capabilities_flagset (*evmc_get_capabilities_fn)(struct evmc_vm* vm
  *
  * Defines the base struct of the VM implementation.
  */
-struct evmc_vm
+struct ivmc_vm
 {
     /**
-     * EVMC ABI version implemented by the VM instance.
+     * IVMC ABI version implemented by the VM instance.
      *
      * Can be used to detect ABI incompatibilities.
-     * The EVMC ABI version represented by this file is in ::EVMC_ABI_VERSION.
+     * The IVMC ABI version represented by this file is in ::IVMC_ABI_VERSION.
      */
     const int abi_version;
 
     /**
-     * The name of the EVMC VM implementation.
+     * The name of the IVMC VM implementation.
      *
      * It MUST be a NULL-terminated not empty string.
      * The content MUST be UTF-8 encoded (this implies ASCII encoding is also allowed).
@@ -995,7 +995,7 @@ struct evmc_vm
     const char* name;
 
     /**
-     * The version of the EVMC VM implementation, e.g. "1.2.3b4".
+     * The version of the IVMC VM implementation, e.g. "1.2.3b4".
      *
      * It MUST be a NULL-terminated not empty string.
      * The content MUST be UTF-8 encoded (this implies ASCII encoding is also allowed).
@@ -1007,14 +1007,14 @@ struct evmc_vm
      *
      * This is a mandatory method and MUST NOT be set to NULL.
      */
-    evmc_destroy_fn destroy;
+    ivmc_destroy_fn destroy;
 
     /**
      * Pointer to function executing a code by the VM instance.
      *
      * This is a mandatory method and MUST NOT be set to NULL.
      */
-    evmc_execute_fn execute;
+    ivmc_execute_fn execute;
 
     /**
      * A method returning capabilities supported by the VM instance.
@@ -1026,24 +1026,24 @@ struct evmc_vm
      *
      * This is a mandatory method and MUST NOT be set to NULL.
      */
-    evmc_get_capabilities_fn get_capabilities;
+    ivmc_get_capabilities_fn get_capabilities;
 
     /**
      * Optional pointer to function modifying VM's options.
      *
      *  If the VM does not support this feature the pointer can be NULL.
      */
-    evmc_set_option_fn set_option;
+    ivmc_set_option_fn set_option;
 };
 
 /* END Python CFFI declarations */
 
-#ifdef EVMC_DOCUMENTATION
+#ifdef IVMC_DOCUMENTATION
 /**
  * Example of a function creating an instance of an example EVM implementation.
  *
  * Each EVM implementation MUST provide a function returning an EVM instance.
- * The function SHOULD be named `evmc_create_<vm-name>(void)`. If the VM name contains hyphens
+ * The function SHOULD be named `ivmc_create_<vm-name>(void)`. If the VM name contains hyphens
  * replaces them with underscores in the function names.
  *
  * @par Binaries naming convention
@@ -1054,7 +1054,7 @@ struct evmc_vm
  *
  * @return  The VM instance or NULL indicating instance creation failure.
  */
-struct evmc_vm* evmc_create_example_vm(void);
+struct ivmc_vm* ivmc_create_example_vm(void);
 #endif
 
 #ifdef __cplusplus

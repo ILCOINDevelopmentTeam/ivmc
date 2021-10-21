@@ -19,5 +19,5 @@ java/hs_err_pid*
 gradle/
 gradlew
 gradlew.bat
-c/evmc-vm.h
+c/ivmc-vm.h
 *.class

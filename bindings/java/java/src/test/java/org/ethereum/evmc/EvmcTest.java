@@ -1,7 +1,7 @@
-// EVMC: Ethereum Client-VM Connector API.
-// Copyright 2019-2020 The EVMC Authors.
+// IVMC: Ethereum Client-VM Connector API.
+// Copyright 2019-2020 The IVMC Authors.
 // Licensed under the Apache License, Version 2.0.
-package org.ethereum.evmc;
+package org.ethereum.ivmc;
 
 import java.net.URL;
 import java.nio.ByteBuffer;
@@ -65,8 +65,8 @@ final class EvmcTest {
     try (EvmcVm vm = EvmcVm.create(exampleVmPath)) {
       HostContext context = new TestHostContext();
       int BYZANTIUM = 4;
-      int EVMC_CALL = 0;
-      int kind = EVMC_CALL;
+      int IVMC_CALL = 0;
+      int kind = IVMC_CALL;
       char[] sender = "39bf71de1b7d7be3b51\0".toCharArray();
       char[] recipient = "53cf77204eEef952e25\0".toCharArray();
       char[] value = "1\0".toCharArray();
@@ -95,8 +95,8 @@ final class EvmcTest {
     try (EvmcVm vm = EvmcVm.create(exampleVmPath)) {
       HostContext context = new TestHostContext();
       int BYZANTIUM = 4;
-      int EVMC_CALL = 0;
-      int kind = EVMC_CALL;
+      int IVMC_CALL = 0;
+      int kind = IVMC_CALL;
       char[] sender = "39bf71de1b7d7be3b51\0".toCharArray();
       char[] recipient = "53cf77204eEef952e25\0".toCharArray();
       char[] value = "1\0".toCharArray();
@@ -125,8 +125,8 @@ final class EvmcTest {
     try (EvmcVm vm = EvmcVm.create(exampleVmPath)) {
       HostContext context = new TestHostContext();
       int BYZANTIUM = 4;
-      int EVMC_CALL = 0;
-      int kind = EVMC_CALL;
+      int IVMC_CALL = 0;
+      int kind = IVMC_CALL;
       char[] sender = "39bf71de1b7d7be3b51\0".toCharArray();
       char[] recipient = "53cf77204eEef952e25\0".toCharArray();
       char[] value = "1\0".toCharArray();
@@ -155,8 +155,8 @@ final class EvmcTest {
     try (EvmcVm vm = EvmcVm.create(exampleVmPath)) {
       HostContext context = new TestHostContext();
       int BYZANTIUM = 4;
-      int EVMC_CALL = 0;
-      int kind = EVMC_CALL;
+      int IVMC_CALL = 0;
+      int kind = IVMC_CALL;
       char[] sender = "39bf71de1b7d7be3b51\0".toCharArray();
       char[] recipient = "53cf77204eEef952e25\0".toCharArray();
       char[] value = "1\0".toCharArray();
@@ -187,8 +187,8 @@ final class EvmcTest {
     try (EvmcVm vm = EvmcVm.create(exampleVmPath)) {
       HostContext context = new TestHostContext();
       int BYZANTIUM = 4;
-      int EVMC_CALL = 0;
-      int kind = EVMC_CALL;
+      int IVMC_CALL = 0;
+      int kind = IVMC_CALL;
       char[] sender = "39bf71de1b7d7be3b51\0".toCharArray();
       char[] recipient = "53cf77204eEef952e25\0".toCharArray();
       char[] value = "1\0".toCharArray();
@@ -221,12 +221,12 @@ final class EvmcTest {
   }
 
   @Test
-  void testExecute_EVMC_CREATE() throws Exception {
+  void testExecute_IVMC_CREATE() throws Exception {
     try (EvmcVm vm = EvmcVm.create(exampleVmPath)) {
       HostContext context = new TestHostContext();
       int BYZANTIUM = 4;
-      int EVMC_CREATE = 3;
-      int kind = EVMC_CREATE;
+      int IVMC_CREATE = 3;
+      int kind = IVMC_CREATE;
       char[] sender = "39bf71de1b7d7be3b51\\0".toCharArray();
       char[] recipient = "53cf77204eEef952e25\0".toCharArray();
       char[] value = "1\0".toCharArray();

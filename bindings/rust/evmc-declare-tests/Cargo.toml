@@ -1,18 +1,18 @@
-# EVMC: Ethereum Client-VM Connector API.
-# Copyright 2019 The EVMC Authors.
+# IVMC: Ethereum Client-VM Connector API.
+# Copyright 2019 The IVMC Authors.
 # Licensed under the Apache License, Version 2.0.
 
 [package]
-name = "evmc-declare-tests"
+name = "ivmc-declare-tests"
 version = "10.0.0-alpha.1"
 authors = ["Jake Lang <jak3lang@gmail.com>"]
 license = "Apache-2.0"
-repository = "https://github.com/ethereum/evmc"
-description = "Bindings to EVMC (VM declare macro) -- Test crate"
+repository = "https://github.com/ILCOINDevelopmentTeam/ivmc"
+description = "Bindings to IVMC (VM declare macro) -- Test crate"
 edition = "2018"
 publish = false
 
 [dependencies]
-evmc-declare = { path = "../evmc-declare" }
-evmc-sys = { path = "../evmc-sys" }
-evmc-vm = { path = "../evmc-vm" }
+ivmc-declare = { path = "../ivmc-declare" }
+ivmc-sys = { path = "../ivmc-sys" }
+ivmc-vm = { path = "../ivmc-vm" }

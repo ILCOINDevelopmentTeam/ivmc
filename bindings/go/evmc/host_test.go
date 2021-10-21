@@ -1,8 +1,8 @@
-// EVMC: Ethereum Client-VM Connector API.
-// Copyright 2018-2020 The EVMC Authors.
+// IVMC: Ethereum Client-VM Connector API.
+// Copyright 2018-2020 The IVMC Authors.
 // Licensed under the Apache License, Version 2.0.
 
-package evmc
+package ivmc
 
 import (
 	"bytes"

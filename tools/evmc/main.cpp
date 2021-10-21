@@ -1,11 +1,11 @@
-// EVMC: Ethereum Client-VM Connector API.
-// Copyright 2019-2020 The EVMC Authors.
+// IVMC: Ethereum Client-VM Connector API.
+// Copyright 2019-2020 The IVMC Authors.
 // Licensed under the Apache License, Version 2.0.
 
 #include <CLI/CLI.hpp>
-#include <evmc/hex.hpp>
-#include <evmc/loader.h>
-#include <evmc/tooling.hpp>
+#include <ivmc/hex.hpp>
+#include <ivmc/loader.h>
+#include <ivmc/tooling.hpp>
 #include <fstream>
 
 namespace
@@ -15,7 +15,7 @@ namespace
 /// @todo The file content is expected to be a hex string but not validated.
 std::string load_hex(const std::string& str)
 {
-    const auto error_code = evmc::validate_hex(str);
+    const auto error_code = ivmc::validate_hex(str);
     if (!error_code)
         return str;
 
@@ -30,7 +30,7 @@ struct HexValidator : public CLI::Validator
     {
         name_ = "HEX";
         func_ = [](const std::string& str) -> std::string {
-            const auto error_code = evmc::validate_hex(str);
+            const auto error_code = ivmc::validate_hex(str);
             if (error_code)
                 return error_code.message();
             return {};
@@ -41,22 +41,22 @@ struct HexValidator : public CLI::Validator
 
 int main(int argc, const char** argv)
 {
-    using namespace evmc;
+    using namespace ivmc;
 
     static HexValidator Hex;
 
     std::string vm_config;
     std::string code_arg;
     int64_t gas = 1000000;
-    auto rev = EVMC_LATEST_STABLE_REVISION;
+    auto rev = IVMC_LATEST_STABLE_REVISION;
     std::string input_arg;
     auto create = false;
     auto bench = false;
 
-    CLI::App app{"EVMC tool"};
+    CLI::App app{"IVMC tool"};
     const auto& version_flag = *app.add_flag("--version", "Print version information and exit");
     const auto& vm_option =
-        *app.add_option("--vm", vm_config, "EVMC VM module")->envname("EVMC_VM");
+        *app.add_option("--vm", vm_config, "IVMC VM module")->envname("IVMC_VM");
 
     auto& run_cmd = *app.add_subcommand("run", "Execute EVM bytecode")->fallthrough();
     run_cmd.add_option("code", code_arg, "Bytecode")->required()->check(Hex | CLI::ExistingFile);
@@ -74,14 +74,14 @@ int main(int argc, const char** argv)
     {
         app.parse(argc, argv);
 
-        evmc::VM vm;
+        ivmc::VM vm;
         if (vm_option.count() != 0)
         {
-            evmc_loader_error_code ec;
-            vm = VM{evmc_load_and_configure(vm_config.c_str(), &ec)};
-            if (ec != EVMC_LOADER_SUCCESS)
+            ivmc_loader_error_code ec;
+            vm = VM{ivmc_load_and_configure(vm_config.c_str(), &ec)};
+            if (ec != IVMC_LOADER_SUCCESS)
             {
-                const auto error = evmc_last_error_msg();
+                const auto error = ivmc_last_error_msg();
                 if (error != nullptr)
                     std::cerr << error << "\n";
                 else
@@ -96,7 +96,7 @@ int main(int argc, const char** argv)
             if (vm)
                 std::cout << vm.name() << " " << vm.version() << " (" << vm_config << ")\n";
 
-            std::cout << "EVMC " PROJECT_VERSION;
+            std::cout << "IVMC " PROJECT_VERSION;
             if (argc >= 1)
                 std::cout << " (" << argv[0] << ")";
             std::cout << "\n";

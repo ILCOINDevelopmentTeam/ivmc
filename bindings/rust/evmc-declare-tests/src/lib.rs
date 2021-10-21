@@ -1,15 +1,15 @@
-/* EVMC: Ethereum Client-VM Connector API.
- * Copyright 2019 The EVMC Authors.
+/* IVMC: Ethereum Client-VM Connector API.
+ * Copyright 2019 The IVMC Authors.
  * Licensed under the Apache License, Version 2.0.
  */
 
-use evmc_declare::evmc_declare_vm;
-use evmc_vm::EvmcVm;
-use evmc_vm::ExecutionContext;
-use evmc_vm::ExecutionMessage;
-use evmc_vm::ExecutionResult;
+use ivmc_declare::ivmc_declare_vm;
+use ivmc_vm::EvmcVm;
+use ivmc_vm::ExecutionContext;
+use ivmc_vm::ExecutionMessage;
+use ivmc_vm::ExecutionResult;
 
-#[evmc_declare_vm("Foo VM", "ewasm, evm", "1.42-alpha.gamma.starship")]
+#[ivmc_declare_vm("Foo VM", "ewasm, evm", "1.42-alpha.gamma.starship")]
 pub struct FooVM {}
 
 impl EvmcVm for FooVM {
@@ -19,7 +19,7 @@ impl EvmcVm for FooVM {
 
     fn execute(
         &self,
-        _revision: evmc_sys::evmc_revision,
+        _revision: ivmc_sys::ivmc_revision,
         _code: &[u8],
         _message: &ExecutionMessage,
         _context: Option<&mut ExecutionContext>,

@@ -1,14 +1,14 @@
-/* EVMC: Ethereum Client-VM Connector API.
- * Copyright 2018-2019 The EVMC Authors.
+/* IVMC: Ethereum Client-VM Connector API.
+ * Copyright 2018-2019 The IVMC Authors.
  * Licensed under the Apache License, Version 2.0.
  */
 
-/** This example shows how to use evmc INTERFACE library from evmc CMake package. */
+/** This example shows how to use ivmc INTERFACE library from ivmc CMake package. */
 
-#include <evmc/evmc.h>
+#include <ivmc/ivmc.h>
 
 int main()
 {
-    struct evmc_vm vm = {.abi_version = EVMC_ABI_VERSION};
-    return vm.abi_version - EVMC_ABI_VERSION;
+    struct ivmc_vm vm = {.abi_version = IVMC_ABI_VERSION};
+    return vm.abi_version - IVMC_ABI_VERSION;
 }

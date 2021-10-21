@@ -1,12 +1,12 @@
-// EVMC: Ethereum Client-VM Connector API.
-// Copyright 2018-2019 The EVMC Authors.
+// IVMC: Ethereum Client-VM Connector API.
+// Copyright 2018-2019 The IVMC Authors.
 // Licensed under the Apache License, Version 2.0.
 
-#include <evmc/instructions.h>
+#include <ivmc/instructions.h>
 #include <gtest/gtest.h>
 
-inline bool operator==(const evmc_instruction_metrics& a,
-                       const evmc_instruction_metrics& b) noexcept
+inline bool operator==(const ivmc_instruction_metrics& a,
+                       const ivmc_instruction_metrics& b) noexcept
 {
     return a.gas_cost == b.gas_cost && a.stack_height_required == b.stack_height_required &&
            a.stack_height_change == b.stack_height_change;
@@ -14,11 +14,11 @@ inline bool operator==(const evmc_instruction_metrics& a,
 
 TEST(instructions, name_gas_cost_equivalence)
 {
-    for (auto r = int{EVMC_FRONTIER}; r <= EVMC_MAX_REVISION; ++r)
+    for (auto r = int{IVMC_FRONTIER}; r <= IVMC_MAX_REVISION; ++r)
     {
-        const auto rev = static_cast<evmc_revision>(r);
-        const auto names = evmc_get_instruction_names_table(rev);
-        const auto metrics = evmc_get_instruction_metrics_table(rev);
+        const auto rev = static_cast<ivmc_revision>(r);
+        const auto names = ivmc_get_instruction_names_table(rev);
+        const auto metrics = ivmc_get_instruction_metrics_table(rev);
 
         for (int i = 0; i < 256; ++i)
         {
@@ -35,10 +35,10 @@ TEST(instructions, name_gas_cost_equivalence)
 
 TEST(instructions, homestead_hard_fork)
 {
-    const auto f = evmc_get_instruction_metrics_table(EVMC_FRONTIER);
-    const auto h = evmc_get_instruction_metrics_table(EVMC_HOMESTEAD);
-    const auto fn = evmc_get_instruction_names_table(EVMC_FRONTIER);
-    const auto hn = evmc_get_instruction_names_table(EVMC_HOMESTEAD);
+    const auto f = ivmc_get_instruction_metrics_table(IVMC_FRONTIER);
+    const auto h = ivmc_get_instruction_metrics_table(IVMC_HOMESTEAD);
+    const auto fn = ivmc_get_instruction_names_table(IVMC_FRONTIER);
+    const auto hn = ivmc_get_instruction_names_table(IVMC_HOMESTEAD);
 
     for (int op = 0x00; op <= 0xff; ++op)
     {
@@ -61,10 +61,10 @@ TEST(instructions, homestead_hard_fork)
 
 TEST(instructions, tangerine_whistle_hard_fork)
 {
-    const auto h = evmc_get_instruction_metrics_table(EVMC_HOMESTEAD);
-    const auto tw = evmc_get_instruction_metrics_table(EVMC_TANGERINE_WHISTLE);
-    const auto hn = evmc_get_instruction_names_table(EVMC_HOMESTEAD);
-    const auto twn = evmc_get_instruction_names_table(EVMC_TANGERINE_WHISTLE);
+    const auto h = ivmc_get_instruction_metrics_table(IVMC_HOMESTEAD);
+    const auto tw = ivmc_get_instruction_metrics_table(IVMC_TANGERINE_WHISTLE);
+    const auto hn = ivmc_get_instruction_names_table(IVMC_HOMESTEAD);
+    const auto twn = ivmc_get_instruction_names_table(IVMC_TANGERINE_WHISTLE);
 
     for (int op = 0x00; op <= 0xff; ++op)
     {
@@ -113,10 +113,10 @@ TEST(instructions, tangerine_whistle_hard_fork)
 
 TEST(instructions, spurious_dragon_hard_fork)
 {
-    const auto sd = evmc_get_instruction_metrics_table(EVMC_SPURIOUS_DRAGON);
-    const auto tw = evmc_get_instruction_metrics_table(EVMC_TANGERINE_WHISTLE);
-    const auto sdn = evmc_get_instruction_names_table(EVMC_SPURIOUS_DRAGON);
-    const auto twn = evmc_get_instruction_names_table(EVMC_TANGERINE_WHISTLE);
+    const auto sd = ivmc_get_instruction_metrics_table(IVMC_SPURIOUS_DRAGON);
+    const auto tw = ivmc_get_instruction_metrics_table(IVMC_TANGERINE_WHISTLE);
+    const auto sdn = ivmc_get_instruction_names_table(IVMC_SPURIOUS_DRAGON);
+    const auto twn = ivmc_get_instruction_names_table(IVMC_TANGERINE_WHISTLE);
 
     for (int op = 0x00; op <= 0xff; ++op)
     {
@@ -137,10 +137,10 @@ TEST(instructions, spurious_dragon_hard_fork)
 
 TEST(instructions, byzantium_hard_fork)
 {
-    const auto b = evmc_get_instruction_metrics_table(EVMC_BYZANTIUM);
-    const auto sd = evmc_get_instruction_metrics_table(EVMC_SPURIOUS_DRAGON);
-    const auto bn = evmc_get_instruction_names_table(EVMC_BYZANTIUM);
-    const auto sdn = evmc_get_instruction_names_table(EVMC_SPURIOUS_DRAGON);
+    const auto b = ivmc_get_instruction_metrics_table(IVMC_BYZANTIUM);
+    const auto sd = ivmc_get_instruction_metrics_table(IVMC_SPURIOUS_DRAGON);
+    const auto bn = ivmc_get_instruction_names_table(IVMC_BYZANTIUM);
+    const auto sdn = ivmc_get_instruction_names_table(IVMC_SPURIOUS_DRAGON);
 
     for (int op = 0x00; op <= 0xff; ++op)
     {
@@ -183,10 +183,10 @@ TEST(instructions, byzantium_hard_fork)
 
 TEST(instructions, constantinople_hard_fork)
 {
-    const auto c = evmc_get_instruction_metrics_table(EVMC_CONSTANTINOPLE);
-    const auto b = evmc_get_instruction_metrics_table(EVMC_BYZANTIUM);
-    const auto cn = evmc_get_instruction_names_table(EVMC_CONSTANTINOPLE);
-    const auto bn = evmc_get_instruction_names_table(EVMC_BYZANTIUM);
+    const auto c = ivmc_get_instruction_metrics_table(IVMC_CONSTANTINOPLE);
+    const auto b = ivmc_get_instruction_metrics_table(IVMC_BYZANTIUM);
+    const auto cn = ivmc_get_instruction_names_table(IVMC_CONSTANTINOPLE);
+    const auto bn = ivmc_get_instruction_names_table(IVMC_BYZANTIUM);
 
     for (int op = 0x00; op <= 0xff; ++op)
     {
@@ -230,10 +230,10 @@ TEST(instructions, constantinople_hard_fork)
 
 TEST(instructions, petersburg_hard_fork)
 {
-    const auto p = evmc_get_instruction_metrics_table(EVMC_PETERSBURG);
-    const auto c = evmc_get_instruction_metrics_table(EVMC_CONSTANTINOPLE);
-    const auto pn = evmc_get_instruction_names_table(EVMC_PETERSBURG);
-    const auto cn = evmc_get_instruction_names_table(EVMC_CONSTANTINOPLE);
+    const auto p = ivmc_get_instruction_metrics_table(IVMC_PETERSBURG);
+    const auto c = ivmc_get_instruction_metrics_table(IVMC_CONSTANTINOPLE);
+    const auto pn = ivmc_get_instruction_names_table(IVMC_PETERSBURG);
+    const auto cn = ivmc_get_instruction_names_table(IVMC_CONSTANTINOPLE);
 
     for (int op = 0x00; op <= 0xff; ++op)
     {
@@ -244,10 +244,10 @@ TEST(instructions, petersburg_hard_fork)
 
 TEST(instructions, istanbul_hard_fork)
 {
-    const auto i = evmc_get_instruction_metrics_table(EVMC_ISTANBUL);
-    const auto p = evmc_get_instruction_metrics_table(EVMC_PETERSBURG);
-    const auto in = evmc_get_instruction_names_table(EVMC_ISTANBUL);
-    const auto pn = evmc_get_instruction_names_table(EVMC_PETERSBURG);
+    const auto i = ivmc_get_instruction_metrics_table(IVMC_ISTANBUL);
+    const auto p = ivmc_get_instruction_metrics_table(IVMC_PETERSBURG);
+    const auto in = ivmc_get_instruction_names_table(IVMC_ISTANBUL);
+    const auto pn = ivmc_get_instruction_names_table(IVMC_PETERSBURG);
 
     for (int op = 0x00; op <= 0xff; ++op)
     {
@@ -288,10 +288,10 @@ TEST(instructions, istanbul_hard_fork)
 
 TEST(instructions, berlin_hard_fork)
 {
-    const auto b = evmc_get_instruction_metrics_table(EVMC_BERLIN);
-    const auto i = evmc_get_instruction_metrics_table(EVMC_ISTANBUL);
-    const auto bn = evmc_get_instruction_names_table(EVMC_BERLIN);
-    const auto in = evmc_get_instruction_names_table(EVMC_ISTANBUL);
+    const auto b = ivmc_get_instruction_metrics_table(IVMC_BERLIN);
+    const auto i = ivmc_get_instruction_metrics_table(IVMC_ISTANBUL);
+    const auto bn = ivmc_get_instruction_names_table(IVMC_BERLIN);
+    const auto in = ivmc_get_instruction_names_table(IVMC_ISTANBUL);
 
     for (int op = 0x00; op <= 0xff; ++op)
     {
@@ -329,10 +329,10 @@ TEST(instructions, berlin_hard_fork)
 
 TEST(instructions, london_hard_fork)
 {
-    const auto l = evmc_get_instruction_metrics_table(EVMC_LONDON);
-    const auto b = evmc_get_instruction_metrics_table(EVMC_BERLIN);
-    const auto ln = evmc_get_instruction_names_table(EVMC_LONDON);
-    const auto bn = evmc_get_instruction_names_table(EVMC_BERLIN);
+    const auto l = ivmc_get_instruction_metrics_table(IVMC_LONDON);
+    const auto b = ivmc_get_instruction_metrics_table(IVMC_BERLIN);
+    const auto ln = ivmc_get_instruction_names_table(IVMC_LONDON);
+    const auto bn = ivmc_get_instruction_names_table(IVMC_BERLIN);
 
     for (int op = 0x00; op <= 0xff; ++op)
     {
@@ -354,10 +354,10 @@ TEST(instructions, london_hard_fork)
 
 TEST(instructions, shanghai_hard_fork)
 {
-    const auto s = evmc_get_instruction_metrics_table(EVMC_SHANGHAI);
-    const auto l = evmc_get_instruction_metrics_table(EVMC_LONDON);
-    const auto sn = evmc_get_instruction_names_table(EVMC_SHANGHAI);
-    const auto ln = evmc_get_instruction_names_table(EVMC_LONDON);
+    const auto s = ivmc_get_instruction_metrics_table(IVMC_SHANGHAI);
+    const auto l = ivmc_get_instruction_metrics_table(IVMC_LONDON);
+    const auto sn = ivmc_get_instruction_names_table(IVMC_SHANGHAI);
+    const auto ln = ivmc_get_instruction_names_table(IVMC_LONDON);
 
     for (int op = 0x00; op <= 0xff; ++op)
     {

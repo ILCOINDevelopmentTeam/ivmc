@@ -1,5 +1,5 @@
-/* EVMC: Ethereum Client-VM Connector API.
- * Copyright 2018-2019 The EVMC Authors.
+/* IVMC: Ethereum Client-VM Connector API.
+ * Copyright 2018-2019 The IVMC Authors.
  * Licensed under the Apache License, Version 2.0.
  */
 
@@ -13,8 +13,8 @@
  */
 #pragma once
 
-#include <evmc/evmc.h>
-#include <evmc/utils.h>
+#include <ivmc/ivmc.h>
+#include <ivmc/utils.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,7 +23,7 @@ extern "C" {
 /**
  * The list of EVM 1 opcodes from every EVM revision.
  */
-enum evmc_opcode
+enum ivmc_opcode
 {
     OP_STOP = 0x00,
     OP_ADD = 0x01,
@@ -184,7 +184,7 @@ enum evmc_opcode
  *
  * Small integer types are used here to make the tables of metrics smaller.
  */
-struct evmc_instruction_metrics
+struct ivmc_instruction_metrics
 {
     /** The instruction gas cost. */
     int16_t gas_cost;
@@ -206,8 +206,8 @@ struct evmc_instruction_metrics
  * @return          The pointer to the array of 256 instruction metrics. Null pointer in case
  *                  an invalid EVM revision provided.
  */
-EVMC_EXPORT const struct evmc_instruction_metrics* evmc_get_instruction_metrics_table(
-    enum evmc_revision revision);
+IVMC_EXPORT const struct ivmc_instruction_metrics* ivmc_get_instruction_metrics_table(
+    enum ivmc_revision revision);
 
 /**
  * Get the table of the EVM 1 instruction names.
@@ -218,7 +218,7 @@ EVMC_EXPORT const struct evmc_instruction_metrics* evmc_get_instruction_metrics_
  * @return          The pointer to the array of 256 instruction names. Null pointer in case
  *                  an invalid EVM revision provided.
  */
-EVMC_EXPORT const char* const* evmc_get_instruction_names_table(enum evmc_revision revision);
+IVMC_EXPORT const char* const* ivmc_get_instruction_names_table(enum ivmc_revision revision);
 
 #ifdef __cplusplus
 }

@@ -1,35 +1,35 @@
-/* EVMC: Ethereum Client-VM Connector API.
- * Copyright 2016-2019 The EVMC Authors.
+/* IVMC: Ethereum Client-VM Connector API.
+ * Copyright 2016-2019 The IVMC Authors.
  * Licensed under the Apache License, Version 2.0.
  */
 
 /// @file
-/// Example implementation of an EVMC Host.
+/// Example implementation of an IVMC Host.
 
 #include "example_host.h"
 
-#include <evmc/evmc.hpp>
+#include <ivmc/ivmc.hpp>
 
 #include <algorithm>
 #include <map>
 #include <vector>
 
-using namespace evmc::literals;
+using namespace ivmc::literals;
 
-namespace evmc
+namespace ivmc
 {
 struct account
 {
     virtual ~account() = default;
 
-    evmc::uint256be balance = {};
+    ivmc::uint256be balance = {};
     std::vector<uint8_t> code;
-    std::map<evmc::bytes32, evmc::bytes32> storage;
+    std::map<ivmc::bytes32, ivmc::bytes32> storage;
 
-    virtual evmc::bytes32 code_hash() const
+    virtual ivmc::bytes32 code_hash() const
     {
         // Extremely dumb "hash" function.
-        evmc::bytes32 ret{};
+        ivmc::bytes32 ret{};
         for (std::vector<uint8_t>::size_type i = 0; i != code.size(); i++)
         {
             auto v = code[i];
@@ -39,29 +39,29 @@ struct account
     }
 };
 
-using accounts = std::map<evmc::address, account>;
+using accounts = std::map<ivmc::address, account>;
 
-}  // namespace evmc
+}  // namespace ivmc
 
-class ExampleHost : public evmc::Host
+class ExampleHost : public ivmc::Host
 {
-    evmc::accounts accounts;
-    evmc_tx_context tx_context{};
+    ivmc::accounts accounts;
+    ivmc_tx_context tx_context{};
 
 public:
     ExampleHost() = default;
-    explicit ExampleHost(evmc_tx_context& _tx_context) noexcept : tx_context{_tx_context} {}
-    ExampleHost(evmc_tx_context& _tx_context, evmc::accounts& _accounts) noexcept
+    explicit ExampleHost(ivmc_tx_context& _tx_context) noexcept : tx_context{_tx_context} {}
+    ExampleHost(ivmc_tx_context& _tx_context, ivmc::accounts& _accounts) noexcept
       : accounts{_accounts}, tx_context{_tx_context}
     {}
 
-    bool account_exists(const evmc::address& addr) const noexcept final
+    bool account_exists(const ivmc::address& addr) const noexcept final
     {
         return accounts.find(addr) != accounts.end();
     }
 
-    evmc::bytes32 get_storage(const evmc::address& addr,
-                              const evmc::bytes32& key) const noexcept final
+    ivmc::bytes32 get_storage(const ivmc::address& addr,
+                              const ivmc::bytes32& key) const noexcept final
     {
         const auto account_iter = accounts.find(addr);
         if (account_iter == accounts.end())
@@ -73,18 +73,18 @@ public:
         return {};
     }
 
-    evmc_storage_status set_storage(const evmc::address& addr,
-                                    const evmc::bytes32& key,
-                                    const evmc::bytes32& value) noexcept final
+    ivmc_storage_status set_storage(const ivmc::address& addr,
+                                    const ivmc::bytes32& key,
+                                    const ivmc::bytes32& value) noexcept final
     {
         auto& account = accounts[addr];
         auto prev_value = account.storage[key];
         account.storage[key] = value;
 
-        return (prev_value == value) ? EVMC_STORAGE_UNCHANGED : EVMC_STORAGE_MODIFIED;
+        return (prev_value == value) ? IVMC_STORAGE_UNCHANGED : IVMC_STORAGE_MODIFIED;
     }
 
-    evmc::uint256be get_balance(const evmc::address& addr) const noexcept final
+    ivmc::uint256be get_balance(const ivmc::address& addr) const noexcept final
     {
         auto it = accounts.find(addr);
         if (it != accounts.end())
@@ -92,7 +92,7 @@ public:
         return {};
     }
 
-    size_t get_code_size(const evmc::address& addr) const noexcept final
+    size_t get_code_size(const ivmc::address& addr) const noexcept final
     {
         auto it = accounts.find(addr);
         if (it != accounts.end())
@@ -100,7 +100,7 @@ public:
         return 0;
     }
 
-    evmc::bytes32 get_code_hash(const evmc::address& addr) const noexcept final
+    ivmc::bytes32 get_code_hash(const ivmc::address& addr) const noexcept final
     {
         auto it = accounts.find(addr);
         if (it != accounts.end())
@@ -108,7 +108,7 @@ public:
         return {};
     }
 
-    size_t copy_code(const evmc::address& addr,
+    size_t copy_code(const ivmc::address& addr,
                      size_t code_offset,
                      uint8_t* buffer_data,
                      size_t buffer_size) const noexcept final
@@ -129,20 +129,20 @@ public:
         return n;
     }
 
-    void selfdestruct(const evmc::address& addr, const evmc::address& beneficiary) noexcept final
+    void selfdestruct(const ivmc::address& addr, const ivmc::address& beneficiary) noexcept final
     {
         (void)addr;
         (void)beneficiary;
     }
 
-    evmc::result call(const evmc_message& msg) noexcept final
+    ivmc::result call(const ivmc_message& msg) noexcept final
     {
-        return {EVMC_REVERT, msg.gas, msg.input_data, msg.input_size};
+        return {IVMC_REVERT, msg.gas, msg.input_data, msg.input_size};
     }
 
-    evmc_tx_context get_tx_context() const noexcept final { return tx_context; }
+    ivmc_tx_context get_tx_context() const noexcept final { return tx_context; }
 
-    evmc::bytes32 get_block_hash(int64_t number) const noexcept final
+    ivmc::bytes32 get_block_hash(int64_t number) const noexcept final
     {
         const int64_t current_block_number = get_tx_context().block_number;
 
@@ -151,10 +151,10 @@ public:
                    0_bytes32;
     }
 
-    void emit_log(const evmc::address& addr,
+    void emit_log(const ivmc::address& addr,
                   const uint8_t* data,
                   size_t data_size,
-                  const evmc::bytes32 topics[],
+                  const ivmc::bytes32 topics[],
                   size_t topics_count) noexcept final
     {
         (void)addr;
@@ -164,37 +164,37 @@ public:
         (void)topics_count;
     }
 
-    evmc_access_status access_account(const evmc::address& addr) noexcept final
+    ivmc_access_status access_account(const ivmc::address& addr) noexcept final
     {
         (void)addr;
-        return EVMC_ACCESS_COLD;
+        return IVMC_ACCESS_COLD;
     }
 
-    evmc_access_status access_storage(const evmc::address& addr,
-                                      const evmc::bytes32& key) noexcept final
+    ivmc_access_status access_storage(const ivmc::address& addr,
+                                      const ivmc::bytes32& key) noexcept final
     {
         (void)addr;
         (void)key;
-        return EVMC_ACCESS_COLD;
+        return IVMC_ACCESS_COLD;
     }
 };
 
 
 extern "C" {
 
-const evmc_host_interface* example_host_get_interface()
+const ivmc_host_interface* example_host_get_interface()
 {
-    return &evmc::Host::get_interface();
+    return &ivmc::Host::get_interface();
 }
 
-evmc_host_context* example_host_create_context(evmc_tx_context tx_context)
+ivmc_host_context* example_host_create_context(ivmc_tx_context tx_context)
 {
     auto host = new ExampleHost{tx_context};
     return host->to_context();
 }
 
-void example_host_destroy_context(evmc_host_context* context)
+void example_host_destroy_context(ivmc_host_context* context)
 {
-    delete evmc::Host::from_context<ExampleHost>(context);
+    delete ivmc::Host::from_context<ExampleHost>(context);
 }
 }
