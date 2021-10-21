@@ -34,8 +34,8 @@ Please visit the [documentation].
 
 * **ivmc run** ([tools/ivmc]) — executes bytecode in any IVMC-compatible VM implementation.
 * **ivmc-vmtester** ([tools/vmtester]) — can test any EVM implementation for compatibility with IVMC.
-* **evm-test** ([evmone → test/unittests]) — allows running the collection of [evmone]'s unit tests on any IVMC-compatible EVM implementation.
-* **evmone-fuzzer** ([evmone → test/fuzzer]) — differential fuzzer for IVMC-compatible EVM implementations. 
+* **evm-test** ([ivmone → test/unittests]) — allows running the collection of [ivmone]'s unit tests on any IVMC-compatible EVM implementation.
+* **ivmone-fuzzer** ([ivmone → test/fuzzer]) — differential fuzzer for IVMC-compatible EVM implementations. 
 
 
 ## Related projects
@@ -46,7 +46,7 @@ Please visit the [documentation].
 - [Daytona]
 - [eip1962-ivmc] (EIP-2003 style precompile)
 - [evmjit]
-- [evmone]
+- [ivmone]
 - [Hera]
 - [Hera.rs]
 - [ssvm-ivmc]
@@ -102,9 +102,9 @@ Licensed under the [Apache License, Version 2.0].
 [documentation]: https://ethereum.github.io/ivmc
 [ewasm]: https://github.com/ewasm/design
 [evmjit]: https://github.com/ILCOINDevelopmentTeam/evmjit
-[evmone]: https://github.com/ILCOINDevelopmentTeam/evmone
-[evmone → test/fuzzer]: https://github.com/ILCOINDevelopmentTeam/evmone/tree/master/test/fuzzer
-[evmone → test/unittests]: https://github.com/ILCOINDevelopmentTeam/evmone/tree/master/test/unittests
+[ivmone]: https://github.com/ILCOINDevelopmentTeam/ivmone
+[ivmone → test/fuzzer]: https://github.com/ILCOINDevelopmentTeam/ivmone/tree/master/test/fuzzer
+[ivmone → test/unittests]: https://github.com/ILCOINDevelopmentTeam/ivmone/tree/master/test/unittests
 [Hera]: https://github.com/ewasm/hera
 [Hera.rs]: https://github.com/ewasm/hera.rs
 [Daytona]: https://github.com/axic/daytona
