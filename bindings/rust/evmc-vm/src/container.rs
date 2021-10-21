@@ -3,23 +3,23 @@
  * Licensed under the Apache License, Version 2.0.
  */
 
-use crate::EvmcVm;
+use crate::IvmcVm;
 
 use std::ops::Deref;
 
 /// Container struct for IVMC instances and user-defined data.
-pub struct EvmcContainer<T>
+pub struct IvmcContainer<T>
 where
-    T: EvmcVm + Sized,
+    T: IvmcVm + Sized,
 {
     #[allow(dead_code)]
     instance: ::ivmc_sys::ivmc_vm,
     vm: T,
 }
 
-impl<T> EvmcContainer<T>
+impl<T> IvmcContainer<T>
 where
-    T: EvmcVm + Sized,
+    T: IvmcVm + Sized,
 {
     /// Basic constructor.
     pub fn new(_instance: ::ivmc_sys::ivmc_vm) -> Box<Self> {
@@ -35,7 +35,7 @@ where
     /// This function expects a valid instance to be passed.
     pub unsafe fn from_ffi_pointer(instance: *mut ::ivmc_sys::ivmc_vm) -> Box<Self> {
         assert!(!instance.is_null(), "from_ffi_pointer received NULL");
-        Box::from_raw(instance as *mut EvmcContainer<T>)
+        Box::from_raw(instance as *mut IvmcContainer<T>)
     }
 
     /// Convert boxed self into an FFI pointer, surrendering ownership of the heap data.
@@ -47,9 +47,9 @@ where
     }
 }
 
-impl<T> Deref for EvmcContainer<T>
+impl<T> Deref for IvmcContainer<T>
 where
-    T: EvmcVm,
+    T: IvmcVm,
 {
     type Target = T;
 
@@ -66,7 +66,7 @@ mod tests {
 
     struct TestVm {}
 
-    impl EvmcVm for TestVm {
+    impl IvmcVm for TestVm {
         fn init() -> Self {
             TestVm {}
         }
@@ -145,7 +145,7 @@ mod tests {
         let host_context = std::ptr::null_mut();
 
         let mut context = ExecutionContext::new(&host, host_context);
-        let container = EvmcContainer::<TestVm>::new(instance);
+        let container = IvmcContainer::<TestVm>::new(instance);
         assert_eq!(
             container
                 .execute(
@@ -158,10 +158,10 @@ mod tests {
             ::ivmc_sys::ivmc_status_code::IVMC_FAILURE
         );
 
-        let ptr = unsafe { EvmcContainer::into_ffi_pointer(container) };
+        let ptr = unsafe { IvmcContainer::into_ffi_pointer(container) };
 
         let mut context = ExecutionContext::new(&host, host_context);
-        let container = unsafe { EvmcContainer::<TestVm>::from_ffi_pointer(ptr) };
+        let container = unsafe { IvmcContainer::<TestVm>::from_ffi_pointer(ptr) };
         assert_eq!(
             container
                 .execute(

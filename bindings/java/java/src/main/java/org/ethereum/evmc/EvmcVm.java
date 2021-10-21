@@ -14,7 +14,7 @@ import java.nio.file.StandardCopyOption;
  *
  * <p>Defines the Java methods capable of accessing the evm implementation.
  */
-public final class EvmcVm implements AutoCloseable {
+public final class IvmcVm implements AutoCloseable {
   private static final Throwable ivmcLoadingError;
   private ByteBuffer nativeVm;
 
@@ -44,7 +44,7 @@ public final class EvmcVm implements AutoCloseable {
         try {
           Path ivmcLib = Files.createTempFile("libivmc-java", extension);
           Files.copy(
-              EvmcVm.class.getResourceAsStream("/libivmc-java." + extension),
+              IvmcVm.class.getResourceAsStream("/libivmc-java." + extension),
               ivmcLib,
               StandardCopyOption.REPLACE_EXISTING);
           ivmcLib.toFile().deleteOnExit();
@@ -75,16 +75,16 @@ public final class EvmcVm implements AutoCloseable {
    * This method loads the specified evm shared library and loads/initializes the jni bindings.
    *
    * @param filename /path/filename of the evm shared object
-   * @throws org.ethereum.ivmc.EvmcLoaderException
+   * @throws org.ethereum.ivmc.IvmcLoaderException
    */
-  public static EvmcVm create(String filename) throws EvmcLoaderException {
+  public static IvmcVm create(String filename) throws IvmcLoaderException {
     if (!isAvailable()) {
-      throw new EvmcLoaderException("IVMC JNI binding library failed to load", ivmcLoadingError);
+      throw new IvmcLoaderException("IVMC JNI binding library failed to load", ivmcLoadingError);
     }
-    return new EvmcVm(filename);
+    return new IvmcVm(filename);
   }
 
-  private EvmcVm(String filename) throws EvmcLoaderException {
+  private IvmcVm(String filename) throws IvmcLoaderException {
     nativeVm = load_and_create(filename);
   }
 
@@ -93,9 +93,9 @@ public final class EvmcVm implements AutoCloseable {
    *
    * @param filename Path to the dynamic object representing the EVM implementation
    * @return Internal object pointer.
-   * @throws org.ethereum.ivmc.EvmcLoaderException
+   * @throws org.ethereum.ivmc.IvmcLoaderException
    */
-  private static native ByteBuffer load_and_create(String filename) throws EvmcLoaderException;
+  private static native ByteBuffer load_and_create(String filename) throws IvmcLoaderException;
 
   /**
    * IVMC ABI version implemented by the VM instance.

@@ -11,12 +11,12 @@
 mod container;
 mod types;
 
-pub use container::EvmcContainer;
+pub use container::IvmcContainer;
 pub use ivmc_sys as ffi;
 pub use types::*;
 
 /// Trait IVMC VMs have to implement.
-pub trait EvmcVm {
+pub trait IvmcVm {
     /// This is called once at initialisation time.
     fn init() -> Self;
     /// This is called for every incoming message.

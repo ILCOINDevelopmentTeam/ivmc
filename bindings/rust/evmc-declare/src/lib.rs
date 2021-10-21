@@ -6,7 +6,7 @@
 //! ivmc-declare is an attribute-style procedural macro to be used for automatic generation of FFI
 //! code for the IVMC API with minimal boilerplate.
 //!
-//! ivmc-declare can be used by applying its attribute to any struct which implements the `EvmcVm`
+//! ivmc-declare can be used by applying its attribute to any struct which implements the `IvmcVm`
 //! trait, from the ivmc-vm crate.
 //!
 //! The macro takes three arguments: a valid UTF-8 stylized VM name, a comma-separated list of
@@ -17,7 +17,7 @@
 //! #[ivmc_declare::ivmc_declare_vm("This is an example VM name", "ewasm, evm", "1.2.3-custom")]
 //! pub struct ExampleVM;
 //!
-//! impl ivmc_vm::EvmcVm for ExampleVM {
+//! impl ivmc_vm::IvmcVm for ExampleVM {
 //!     fn init() -> Self {
 //!             ExampleVM {}
 //!     }
@@ -299,11 +299,11 @@ fn build_create_fn(names: &VMNameSet) -> proc_macro2::TokenStream {
                 version: unsafe { ::std::ffi::CStr::from_bytes_with_nul_unchecked(#static_version_ident.as_bytes()).as_ptr() as *const i8 },
             };
 
-            let container = ::ivmc_vm::EvmcContainer::<#type_ident>::new(new_instance);
+            let container = ::ivmc_vm::IvmcContainer::<#type_ident>::new(new_instance);
 
             unsafe {
                 // Release ownership to IVMC.
-                ::ivmc_vm::EvmcContainer::into_ffi_pointer(container)
+                ::ivmc_vm::IvmcContainer::into_ffi_pointer(container)
             }
         }
     }
@@ -321,7 +321,7 @@ fn build_destroy_fn(names: &VMNameSet) -> proc_macro2::TokenStream {
             }
             unsafe {
                 // Acquire ownership from IVMC. This will deallocate it also at the end of the scope.
-                ::ivmc_vm::EvmcContainer::<#type_ident>::from_ffi_pointer(instance);
+                ::ivmc_vm::IvmcContainer::<#type_ident>::from_ffi_pointer(instance);
             }
         }
     }
@@ -342,7 +342,7 @@ fn build_execute_fn(names: &VMNameSet) -> proc_macro2::TokenStream {
             code_size: usize
         ) -> ::ivmc_vm::ffi::ivmc_result
         {
-            use ivmc_vm::EvmcVm;
+            use ivmc_vm::IvmcVm;
 
             // TODO: context is optional in case of the "precompiles" capability
             if instance.is_null() || msg.is_null() || (code.is_null() && code_size != 0) {
@@ -369,7 +369,7 @@ fn build_execute_fn(names: &VMNameSet) -> proc_macro2::TokenStream {
 
             let container = unsafe {
                 // Acquire ownership from IVMC.
-                ::ivmc_vm::EvmcContainer::<#type_name_ident>::from_ffi_pointer(instance)
+                ::ivmc_vm::IvmcContainer::<#type_name_ident>::from_ffi_pointer(instance)
             };
 
             let result = ::std::panic::catch_unwind(|| {
@@ -395,7 +395,7 @@ fn build_execute_fn(names: &VMNameSet) -> proc_macro2::TokenStream {
 
             unsafe {
                 // Release ownership to IVMC.
-                ::ivmc_vm::EvmcContainer::into_ffi_pointer(container);
+                ::ivmc_vm::IvmcContainer::into_ffi_pointer(container);
             }
 
             result.into()

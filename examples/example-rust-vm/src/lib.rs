@@ -9,7 +9,7 @@ use ivmc_vm::*;
 #[ivmc_declare_vm("ExampleRustVM", "evm, precompiles", "10.0.0-alpha.1")]
 pub struct ExampleRustVM;
 
-impl EvmcVm for ExampleRustVM {
+impl IvmcVm for ExampleRustVM {
     fn init() -> Self {
         ExampleRustVM {}
     }

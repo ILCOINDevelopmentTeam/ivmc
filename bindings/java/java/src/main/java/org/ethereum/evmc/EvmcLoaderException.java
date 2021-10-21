@@ -4,12 +4,12 @@
 package org.ethereum.ivmc;
 
 /** Exception thrown when the IVMC binding or VM fails to load. */
-public class EvmcLoaderException extends Exception {
-  public EvmcLoaderException(String message) {
+public class IvmcLoaderException extends Exception {
+  public IvmcLoaderException(String message) {
     super(message);
   }
 
-  public EvmcLoaderException(String message, Throwable cause) {
+  public IvmcLoaderException(String message, Throwable cause) {
     super(message, cause);
   }
 }

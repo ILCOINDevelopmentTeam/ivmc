@@ -4,7 +4,7 @@
  */
 
 use ivmc_declare::ivmc_declare_vm;
-use ivmc_vm::EvmcVm;
+use ivmc_vm::IvmcVm;
 use ivmc_vm::ExecutionContext;
 use ivmc_vm::ExecutionMessage;
 use ivmc_vm::ExecutionResult;
@@ -12,7 +12,7 @@ use ivmc_vm::ExecutionResult;
 #[ivmc_declare_vm("Foo VM", "ewasm, evm", "1.42-alpha.gamma.starship")]
 pub struct FooVM {}
 
-impl EvmcVm for FooVM {
+impl IvmcVm for FooVM {
     fn init() -> Self {
         FooVM {}
     }

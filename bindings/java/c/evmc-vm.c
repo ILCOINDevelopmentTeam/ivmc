@@ -4,7 +4,7 @@
  */
 
 #include "host.h"
-#include "org_ethereum_ivmc_EvmcVm.h"
+#include "org_ethereum_ivmc_IvmcVm.h"
 #include <ivmc/helpers.h>
 #include <ivmc/loader.h>
 
@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-JNIEXPORT jobject JNICALL Java_org_ethereum_ivmc_EvmcVm_load_1and_1create(JNIEnv* jenv,
+JNIEXPORT jobject JNICALL Java_org_ethereum_ivmc_IvmcVm_load_1and_1create(JNIEnv* jenv,
                                                                           jclass jcls,
                                                                           jstring jfilename)
 {
@@ -30,7 +30,7 @@ JNIEXPORT jobject JNICALL Java_org_ethereum_ivmc_EvmcVm_load_1and_1create(JNIEnv
     if (loader_error != IVMC_LOADER_SUCCESS)
     {
         const char* error_msg = ivmc_last_error_msg();
-        jclass exception_class = (*jenv)->FindClass(jenv, "org/ethereum/ivmc/EvmcLoaderException");
+        jclass exception_class = (*jenv)->FindClass(jenv, "org/ethereum/ivmc/IvmcLoaderException");
         assert(exception_class != NULL);
         (*jenv)->ThrowNew(jenv, exception_class, error_msg ? error_msg : "Loading IVMC VM failed");
     }
@@ -39,14 +39,14 @@ JNIEXPORT jobject JNICALL Java_org_ethereum_ivmc_EvmcVm_load_1and_1create(JNIEnv
     return jresult;
 }
 
-JNIEXPORT jint JNICALL Java_org_ethereum_ivmc_EvmcVm_abi_1version(JNIEnv* jenv, jclass jcls)
+JNIEXPORT jint JNICALL Java_org_ethereum_ivmc_IvmcVm_abi_1version(JNIEnv* jenv, jclass jcls)
 {
     (void)jenv;
     (void)jcls;
     return IVMC_ABI_VERSION;
 }
 
-JNIEXPORT jstring JNICALL Java_org_ethereum_ivmc_EvmcVm_name(JNIEnv* jenv,
+JNIEXPORT jstring JNICALL Java_org_ethereum_ivmc_IvmcVm_name(JNIEnv* jenv,
                                                              jclass jcls,
                                                              jobject jevm)
 {
@@ -57,7 +57,7 @@ JNIEXPORT jstring JNICALL Java_org_ethereum_ivmc_EvmcVm_name(JNIEnv* jenv,
     return (*jenv)->NewStringUTF(jenv, evm_name);
 }
 
-JNIEXPORT jstring JNICALL Java_org_ethereum_ivmc_EvmcVm_version(JNIEnv* jenv,
+JNIEXPORT jstring JNICALL Java_org_ethereum_ivmc_IvmcVm_version(JNIEnv* jenv,
                                                                 jclass jcls,
                                                                 jobject jevm)
 {
@@ -68,7 +68,7 @@ JNIEXPORT jstring JNICALL Java_org_ethereum_ivmc_EvmcVm_version(JNIEnv* jenv,
     return (*jenv)->NewStringUTF(jenv, evm_version);
 }
 
-JNIEXPORT void JNICALL Java_org_ethereum_ivmc_EvmcVm_destroy(JNIEnv* jenv,
+JNIEXPORT void JNICALL Java_org_ethereum_ivmc_IvmcVm_destroy(JNIEnv* jenv,
                                                              jclass jcls,
                                                              jobject jevm)
 {
@@ -92,7 +92,7 @@ static jobject AllocateDirect(JNIEnv* jenv, size_t capacity)
     return (*jenv)->CallStaticObjectMethod(jenv, jcls, method, capacity);
 }
 
-JNIEXPORT jobject JNICALL Java_org_ethereum_ivmc_EvmcVm_execute(JNIEnv* jenv,
+JNIEXPORT jobject JNICALL Java_org_ethereum_ivmc_IvmcVm_execute(JNIEnv* jenv,
                                                                 jclass jcls,
                                                                 jobject jevm,
                                                                 jobject jcontext,
@@ -118,7 +118,7 @@ JNIEXPORT jobject JNICALL Java_org_ethereum_ivmc_EvmcVm_execute(JNIEnv* jenv,
     return jresult;
 }
 
-JNIEXPORT jint JNICALL Java_org_ethereum_ivmc_EvmcVm_get_1capabilities(JNIEnv* jenv,
+JNIEXPORT jint JNICALL Java_org_ethereum_ivmc_IvmcVm_get_1capabilities(JNIEnv* jenv,
                                                                        jclass jcls,
                                                                        jobject jevm)
 {
@@ -128,7 +128,7 @@ JNIEXPORT jint JNICALL Java_org_ethereum_ivmc_EvmcVm_get_1capabilities(JNIEnv* j
     return (jint)evm->get_capabilities(evm);
 }
 
-JNIEXPORT jint JNICALL Java_org_ethereum_ivmc_EvmcVm_set_1option(JNIEnv* jenv,
+JNIEXPORT jint JNICALL Java_org_ethereum_ivmc_IvmcVm_set_1option(JNIEnv* jenv,
                                                                  jclass jcls,
                                                                  jobject jevm,
                                                                  jstring jname,

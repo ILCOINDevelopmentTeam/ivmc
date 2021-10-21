@@ -11,8 +11,8 @@ add_jar(ivmc-jar
     OUTPUT_NAME ivmc-java
     VERSION ${PROJECT_VERSION}
     SOURCES
-    java/src/main/java/org/ethereum/ivmc/EvmcLoaderException.java
-    java/src/main/java/org/ethereum/ivmc/EvmcVm.java
+    java/src/main/java/org/ethereum/ivmc/IvmcLoaderException.java
+    java/src/main/java/org/ethereum/ivmc/IvmcVm.java
     java/src/main/java/org/ethereum/ivmc/Host.java
     java/src/main/java/org/ethereum/ivmc/HostContext.java
     GENERATE_NATIVE_HEADERS ivmc-java-native-headers)
