@@ -147,15 +147,6 @@ int run(ivmc::VM& vm,
     if(storage_hex != "") host.set_storage(msg.recipient, storage_key3, storage);
 
     auto result = vm.execute(host, rev, msg, exec_code.data(), exec_code.size());
-    result = vm.execute(host, rev, msg, exec_code.data(), exec_code.size());
-    result = vm.execute(host, rev, msg, exec_code.data(), exec_code.size());
-    result = vm.execute(host, rev, msg, exec_code.data(), exec_code.size());
-    result = vm.execute(host, rev, msg, exec_code.data(), exec_code.size());
-    result = vm.execute(host, rev, msg, exec_code.data(), exec_code.size());
-    result = vm.execute(host, rev, msg, exec_code.data(), exec_code.size());
-    result = vm.execute(host, rev, msg, exec_code.data(), exec_code.size());
-    result = vm.execute(host, rev, msg, exec_code.data(), exec_code.size());
-    result = vm.execute(host, rev, msg, exec_code.data(), exec_code.size());
 
     if (bench)
         tooling::bench(host, vm, rev, msg, exec_code, result, out);
