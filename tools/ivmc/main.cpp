@@ -50,6 +50,7 @@ int main(int argc, const char** argv)
     int64_t gas = 1000000;
     auto rev = IVMC_LATEST_STABLE_REVISION;
     std::string input_arg;
+    std::string storage_arg;
     auto create = false;
     auto bench = false;
 
@@ -63,6 +64,7 @@ int main(int argc, const char** argv)
     run_cmd.add_option("--gas", gas, "Execution gas limit", true)->check(CLI::Range(0, 1000000000));
     run_cmd.add_option("--rev", rev, "EVM revision", true);
     run_cmd.add_option("--input", input_arg, "Input bytes")->check(Hex | CLI::ExistingFile);
+    run_cmd.add_option("--storage", storage_arg, "Input bytes")->check(Hex | CLI::ExistingFile);
     run_cmd.add_flag(
         "--create", create,
         "Create new contract out of the code and then execute this contract with the input");
@@ -113,8 +115,9 @@ int main(int argc, const char** argv)
 
             const auto code_hex = load_hex(code_arg);
             const auto input_hex = load_hex(input_arg);
-            // If code_hex or input_hex is not valid hex string an exception is thrown.
-            return tooling::run(vm, rev, gas, code_hex, input_hex, create, bench, std::cout);
+            const auto storage_hex = load_hex(storage_arg);
+            // If code_hex or input_hex or storage_hex is not valid hex string an exception is thrown.
+            return tooling::run(vm, rev, gas, code_hex, input_hex, storage_hex, create, bench, std::cout);
         }
 
         return 0;

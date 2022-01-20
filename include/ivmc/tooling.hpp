@@ -13,6 +13,7 @@ int run(ivmc::VM& vm,
         int64_t gas,
         const std::string& code_hex,
         const std::string& input_hex,
+        const std::string& storage_hex,
         bool create,
         bool bench,
         std::ostream& out);
