@@ -67,7 +67,7 @@ int main(int argc, const char** argv)
     run_cmd.add_option("--rev", rev, "EVM revision", true);
     run_cmd.add_option("--input", input_arg, "Input bytes")->check(Hex | CLI::ExistingFile);
     run_cmd.add_option("--storage", storage_arg, "Input bytes")->check(Hex | CLI::ExistingFile);
-    run_cmd.add_option("--recipient", recipient_arg, "recipient address")->check(Hex | CLI::ExistingFile);
+    run_cmd.add_option("--recipient", recipient_arg, "Recipient address")->check(Hex | CLI::ExistingFile);
     run_cmd.add_option("--sender", sender_arg, "Sender address")->check(Hex | CLI::ExistingFile);
     run_cmd.add_flag(
         "--create", create,
