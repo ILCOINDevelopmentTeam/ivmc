@@ -51,6 +51,8 @@ int main(int argc, const char** argv)
     auto rev = IVMC_LATEST_STABLE_REVISION;
     std::string input_arg;
     std::string storage_arg;
+    std::string recipient_arg;
+    std::string sender_arg;
     auto create = false;
     auto bench = false;
 
@@ -65,6 +67,8 @@ int main(int argc, const char** argv)
     run_cmd.add_option("--rev", rev, "EVM revision", true);
     run_cmd.add_option("--input", input_arg, "Input bytes")->check(Hex | CLI::ExistingFile);
     run_cmd.add_option("--storage", storage_arg, "Input bytes")->check(Hex | CLI::ExistingFile);
+    run_cmd.add_option("--recipient", recipient_arg, "recipient address")->check(Hex | CLI::ExistingFile);
+    run_cmd.add_option("--sender", sender_arg, "Sender address")->check(Hex | CLI::ExistingFile);
     run_cmd.add_flag(
         "--create", create,
         "Create new contract out of the code and then execute this contract with the input");
@@ -117,7 +121,7 @@ int main(int argc, const char** argv)
             const auto input_hex = load_hex(input_arg);
             const auto storage_hex = load_hex(storage_arg);
             // If code_hex or input_hex or storage_hex is not valid hex string an exception is thrown.
-            return tooling::run(vm, rev, gas, code_hex, input_hex, storage_hex, create, bench, std::cout);
+            return tooling::run(vm, rev, gas, code_hex, input_hex, storage_hex, recipient_arg, sender_arg, create, bench, std::cout);
         }
 
         return 0;

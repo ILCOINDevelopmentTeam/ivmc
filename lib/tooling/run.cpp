@@ -89,6 +89,8 @@ int run(ivmc::VM& vm,
         const std::string& code_hex,
         const std::string& input_hex,
         const std::string& storage_hex,
+        const std::string& recipient,
+        const std::string& sender,
         bool create,
         bool bench,
         std::ostream& out)
@@ -109,6 +111,8 @@ int run(ivmc::VM& vm,
     msg.gas = gas;
     msg.input_data = input.data();
     msg.input_size = input.size();
+    msg.recipient = recipient;
+    msg.sender = sender;
 
     const ivmc_bytes32 storage_key3 = {{0}};
 
@@ -117,7 +121,8 @@ int run(ivmc::VM& vm,
     {
         ivmc_message create_msg{};
         create_msg.kind = IVMC_CREATE;
-        create_msg.recipient = create_address;
+        create_msg.recipient = recipient;
+        create_msg.sender = sender;
         create_msg.gas = create_gas;
 
         const auto create_result = vm.execute(host, rev, create_msg, code.data(), code.size());

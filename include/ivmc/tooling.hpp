@@ -14,6 +14,8 @@ int run(ivmc::VM& vm,
         const std::string& code_hex,
         const std::string& input_hex,
         const std::string& storage_hex,
+        const std::string& recipient,
+        const std::string& sender,
         bool create,
         bool bench,
         std::ostream& out);
