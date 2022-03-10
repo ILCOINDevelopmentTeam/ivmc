@@ -107,10 +107,10 @@ int run(ivmc::VM& vm,
 
     MockedHost host;
 
-    auto recipient_add = ivmc_address{};
+    auto recipient_add = address{};
     std::copy(recipient.begin(), recipient.end(), std::begin(recipient_add.bytes));
 
-    auto sender_add = ivmc_address{};
+    auto sender_add = address{};
     std::copy(sender.begin(), sender.end(), std::begin(sender_add.bytes));
 
     ivmc_message msg{};
@@ -127,8 +127,7 @@ int run(ivmc::VM& vm,
     {
         ivmc_message create_msg{};
         create_msg.kind = IVMC_CREATE;
-        create_msg.recipient = recipient_add;
-        create_msg.sender = sender_add;
+        create_msg.recipient = create_address;
         create_msg.gas = create_gas;
 
         const auto create_result = vm.execute(host, rev, create_msg, code.data(), code.size());
