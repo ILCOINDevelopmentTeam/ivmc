@@ -117,8 +117,8 @@ int run(ivmc::VM& vm,
     msg.gas = gas;
     msg.input_data = input.data();
     msg.input_size = input.size();
-    msg.recipient = recipient_add;
-    msg.sender = sender_add;
+    msg.recipient = create_address;
+    msg.sender = create_address;
 
     const ivmc_bytes32 storage_key3 = {{0}};
 
