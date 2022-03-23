@@ -120,6 +120,7 @@ int run(ivmc::VM& vm,
     msg.recipient = create_address;
     msg.sender = create_address;
 
+    // const ivmc_bytes32 storage_key3 = 0x82eca1b50a096e7f1e065cf3528c2ebeb8041672321732640dfe1bdb94c5225c_bytes32;
     const ivmc_bytes32 storage_key3 = {};
 
     bytes_view exec_code = code;
@@ -204,7 +205,7 @@ int run(ivmc::VM& vm,
       msg2.recipient = create_address;
       msg2.sender = create_address;
 
-      // host2.accounts = host.accounts;
+      host2.accounts = host.accounts;
       out << "Count:   " << host.accounts.size() << "\n";
 
       const char *__storage_c = key_string3.c_str();
@@ -216,12 +217,40 @@ int run(ivmc::VM& vm,
       auto& __recipient_account = host2.accounts[msg2.recipient];
       __recipient_account.code = __code_account;
 
-      out << "Count:   " << host2.accounts.size() << "\n";
+      out << "Count2:   " << host2.accounts.size() << "\n";
+      out << "Count3:   " << __recipient_account.storage.size() << "\n";
+
+      // Iterate over the map using iterator
+      int c = 0;
+      auto it = __recipient_account.storage.begin();
+      while(it != __recipient_account.storage.end())
+      {
+          // out << string(it->first) << " :: " << ((storage_value)it->second).value << "\n";
+
+          std::ostringstream convert5;
+          for (int i = 0; i < sizeof(it->first.bytes) / sizeof(it->first.bytes[0]); i++){
+              convert5 << std::setw(2) << std::setfill('0') << std::hex << (int)it->first.bytes[i];
+              // out << std::to_string(i+1)+":   " << std::hex << (int)_code_account[i] << "\n";
+          }
+          std::string key_string5 = convert5.str();
+
+          std::ostringstream convert6;
+          for (int i = 0; i < sizeof(((storage_value)it->second).value.bytes) / sizeof(((storage_value)it->second).value.bytes[0]); i++){
+              convert6 << std::setw(2) << std::setfill('0') << std::hex << (int)((storage_value)it->second).value.bytes[i];
+              // out << std::to_string(i+1)+":   " << std::hex << (int)_code_account[i] << "\n";
+          }
+          std::string key_string6 = convert6.str();
+
+          out << std::to_string(++c)+":   " << key_string5+" - " << key_string6 << "\n";
+          out << "\n";
+
+          it++;
+      }
 
       auto result2 = vm.execute(host2, rev, msg2, result.output_data, result.output_size);
 
       const auto gas_used2 = msg2.gas - result2.gas_left;
-      out << "Result2:   " << result2.status_code << "\nGas used: " << gas_used2 << "\n";
+      out << "Result2:   " << result2.status_code << "\nGas used2: " << gas_used2 << "\n";
 
       if (result2.status_code == IVMC_SUCCESS || result2.status_code == IVMC_REVERT)
           out << "Output2:   " << hex({result2.output_data, result2.output_size}) << "\n";
