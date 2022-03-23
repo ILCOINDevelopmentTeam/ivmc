@@ -120,7 +120,7 @@ int run(ivmc::VM& vm,
     msg.recipient = create_address;
     msg.sender = create_address;
 
-    const ivmc_bytes32 storage_key3 = {{0}};
+    const ivmc_bytes32 storage_key3 = {};
 
     bytes_view exec_code = code;
     if (create)
@@ -167,16 +167,65 @@ int run(ivmc::VM& vm,
     if (result.status_code == IVMC_SUCCESS || result.status_code == IVMC_REVERT)
         out << "Output:   " << hex({result.output_data, result.output_size}) << "\n";
 
-    ivmc_bytes32 storage_value3 = host.get_storage(msg.recipient, storage_key3);
+    if(host.account_exists(msg.recipient)){
 
-    std::ostringstream convert3;
-    for (int i = 0; i < sizeof(storage_value3.bytes) / sizeof(storage_value3.bytes[0]); i++){
-        convert3 << std::setw(2) << std::setfill('0') << std::hex << (int)storage_value3.bytes[i];
-        // out << std::to_string(i+1)+":   " << std::hex << (int)storage_value3.bytes[i] << "\n";
+      ivmc_bytes32 storage_value3 = host.get_storage(msg.recipient, storage_key3);
+
+      std::ostringstream convert3;
+      for (int i = 0; i < sizeof(storage_value3.bytes) / sizeof(storage_value3.bytes[0]); i++){
+          convert3 << std::setw(2) << std::setfill('0') << std::hex << (int)storage_value3.bytes[i];
+          // out << std::to_string(i+1)+":   " << std::hex << (int)storage_value3.bytes[i] << "\n";
+      }
+
+      std::string key_string3 = convert3.str();
+      out << "Storage:   " << key_string3 << "\n";
+
+      auto& recipient_account = host.accounts[msg.recipient];
+
+      //*******************************************
+      bytes _code_account = recipient_account.code;
+
+      std::ostringstream convert4;
+      for (int i = 0; i < sizeof(_code_account) / sizeof(_code_account[0]); i++){
+          convert4 << std::setw(2) << std::setfill('0') << std::hex << (int)_code_account[i];
+          // out << std::to_string(i+1)+":   " << std::hex << (int)_code_account[i] << "\n";
+      }
+
+      std::string key_string4 = convert4.str();
+      out << "Code:   " << key_string4 << "\n";
+      out << "\n";
+
+      MockedHost host2;
+
+      ivmc_message msg2{};
+      msg2.gas = gas;
+      msg2.input_data = input.data();
+      msg2.input_size = input.size();
+      msg2.recipient = create_address;
+      msg2.sender = create_address;
+
+      // host2.accounts = host.accounts;
+      out << "Count:   " << host.accounts.size() << "\n";
+
+      const char *__storage_c = key_string3.c_str();
+      const bytes32 __storage = from_hex32(__storage_c);
+      const bytes __code_account = ivmc::from_hex(key_string4);
+
+      host2.set_storage(msg2.recipient, storage_key3, __storage);
+
+      auto& __recipient_account = host2.accounts[msg2.recipient];
+      __recipient_account.code = __code_account;
+
+      out << "Count:   " << host2.accounts.size() << "\n";
+
+      auto result2 = vm.execute(host2, rev, msg2, result.output_data, result.output_size);
+
+      const auto gas_used2 = msg2.gas - result2.gas_left;
+      out << "Result2:   " << result2.status_code << "\nGas used: " << gas_used2 << "\n";
+
+      if (result2.status_code == IVMC_SUCCESS || result2.status_code == IVMC_REVERT)
+          out << "Output2:   " << hex({result2.output_data, result2.output_size}) << "\n";
     }
-
-    std::string key_string3 = convert3.str();
-    out << "Storage:   " << key_string3 << "\n";
 
     return 0;
 }
