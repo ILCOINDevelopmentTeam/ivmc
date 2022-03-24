@@ -205,17 +205,25 @@ int run(ivmc::VM& vm,
       msg2.recipient = create_address;
       msg2.sender = create_address;
 
-      out << "Count:   " << host.accounts.size() << "\n";
+      out << "Count accounts:   " << host.accounts.size() << "\n";
 
       const char *__storage_c = key_string3.c_str();
       const bytes32 __storage = from_hex32(__storage_c);
       const bytes __code_account = ivmc::from_hex(key_string4);
 
       auto& __recipient_account = host.accounts[msg.recipient];
+      out << "Count Storage:   " << __recipient_account.storage.size() << "\n";
 
-      out << "Count3:   " << __recipient_account.storage.size() << "\n";
+      // Address
+      std::ostringstream convert7;
+      for (int i = 0; i < sizeof(msg.recipient.bytes) / sizeof(msg.recipient.bytes[0]); i++){
+          convert7 << std::setw(2) << std::setfill('0') << std::hex << (int)msg.recipient.bytes[i];
+      }
+      std::string key_string7 = convert7.str();
 
-      // Iterate over the map using iterator
+      std::string full_address_storage = key_string7;
+
+      // Storage
       int c = 0;
       auto it = __recipient_account.storage.begin();
       while(it != __recipient_account.storage.end())
@@ -223,25 +231,26 @@ int run(ivmc::VM& vm,
           std::ostringstream convert5;
           for (int i = 0; i < sizeof(it->first.bytes) / sizeof(it->first.bytes[0]); i++){
               convert5 << std::setw(2) << std::setfill('0') << std::hex << (int)it->first.bytes[i];
-              // out << std::to_string(i+1)+":   " << std::hex << (int)_code_account[i] << "\n";
           }
           std::string key_string5 = convert5.str();
 
           std::ostringstream convert6;
           for (int i = 0; i < sizeof(((storage_value)it->second).value.bytes) / sizeof(((storage_value)it->second).value.bytes[0]); i++){
               convert6 << std::setw(2) << std::setfill('0') << std::hex << (int)((storage_value)it->second).value.bytes[i];
-              // out << std::to_string(i+1)+":   " << std::hex << (int)_code_account[i] << "\n";
           }
           std::string key_string6 = convert6.str();
 
           out << std::to_string(++c) + ":   " << key_string5 + " - " << key_string6 << "\n";
           out << "\n";
 
+          full_address_storage += key_string5 + key_string6;
+
           // Set up
           const char *_key_string5 = key_string5.c_str();
           const ivmc_bytes32 __storage_key3 =  from_hex32(_key_string5);
           const char *_key_string6 = key_string6.c_str();
           const ivmc_bytes32 __storage_value =  from_hex32(_key_string6);
+
           host2.set_storage(msg2.recipient, __storage_key3, __storage_value);
 
           it++;
@@ -254,6 +263,8 @@ int run(ivmc::VM& vm,
 
       if (result2.status_code == IVMC_SUCCESS || result2.status_code == IVMC_REVERT)
           out << "Output2:   " << hex({result2.output_data, result2.output_size}) << "\n";
+
+      out << "Storage2:   " << full_address_storage << "\n";
     }
 
     return 0;
