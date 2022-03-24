@@ -18,6 +18,9 @@ namespace
 /// The address where a new contract is created with --create option.
 constexpr auto create_address = 0xc9ea7ed000000000000000000000000000000001_address;
 
+const int ADDRESS_SIZE = 40;
+const int STORAGE_SIZE = 64;
+
 /// The gas limit for contract creation.
 constexpr auto create_gas = 10'000'000;
 
@@ -100,8 +103,8 @@ int run(ivmc::VM& vm,
     const bytes code = ivmc::from_hex(code_hex);
     const bytes input = ivmc::from_hex(input_hex);
 
-    const char *storage_c = storage_hex.c_str();
-    const bytes32 storage = from_hex32(storage_c);
+    // const char *storage_c = storage_hex.c_str();
+    // const bytes32 storage = from_hex32(storage_c);
     // std::string storage_s = "00000000000001234560000000000000000000000000000000000000000000ea";
     // bytes32 storage = from_hex32(storage_c);
 
@@ -120,7 +123,47 @@ int run(ivmc::VM& vm,
     msg.recipient = create_address;
     msg.sender = create_address;
 
-    // const ivmc_bytes32 storage_key3 = 0x82eca1b50a096e7f1e065cf3528c2ebeb8041672321732640dfe1bdb94c5225c_bytes32;
+    std::string full_address_storage_tmp = storage_hex;
+
+    int pos_str = 0;
+    int len_str = ADDRESS_SIZE;
+    std::string storage_address_string = full_address_storage_tmp.substr(pos_str, len_str);
+
+    if(!storage_address_string.empty()){
+
+      bytes storage_address_bytes = ivmc::from_hex(storage_address_string);
+      auto storage_address = address{};
+      std::copy(storage_address_bytes.begin(), storage_address_bytes.end(), std::begin(storage_address.bytes));
+
+      std::string storage_key_string;
+      std::string storage_value_string;
+
+      int _i = 0;
+
+      do {
+        pos_str += len_str;
+        len_str = STORAGE_SIZE;
+        storage_key_string = pos_str < full_address_storage_tmp.length() ? full_address_storage_tmp.substr(pos_str, len_str) : "";
+
+        pos_str += len_str;
+        len_str = STORAGE_SIZE;
+        storage_value_string = pos_str < full_address_storage_tmp.length() ? full_address_storage_tmp.substr(pos_str, len_str) : "";
+
+        if(!storage_key_string.empty() && !storage_value_string.empty()){
+
+          // Set up
+          const char *_storage_key_c = storage_key_string.c_str();
+          const ivmc_bytes32 __storage_key_c =  from_hex32(_storage_key_c);
+          const char *_storage_value_c = storage_value_string.c_str();
+          const ivmc_bytes32 __storage_value_c =  from_hex32(_storage_value_c);
+
+          host.set_storage(storage_address, __storage_key_c, __storage_value_c);
+          out << "iiii:   " << ++_i << " : " << storage_key_string << " : " << storage_value_string << "\n";
+        }
+
+      } while (!storage_key_string.empty() && !storage_value_string.empty());
+    }
+
     const ivmc_bytes32 storage_key3 = {};
 
     bytes_view exec_code = code;
@@ -155,7 +198,7 @@ int run(ivmc::VM& vm,
     }
     out << "\n";
 
-    if(storage_hex != "") host.set_storage(msg.recipient, storage_key3, storage);
+    // if(storage_hex != "") host.set_storage(msg.recipient, storage_key3, storage);
 
     auto result = vm.execute(host, rev, msg, exec_code.data(), exec_code.size());
 
@@ -251,7 +294,7 @@ int run(ivmc::VM& vm,
           const char *_key_string6 = key_string6.c_str();
           const ivmc_bytes32 __storage_value =  from_hex32(_key_string6);
 
-          host2.set_storage(msg2.recipient, __storage_key3, __storage_value);
+          // host2.set_storage(msg2.recipient, __storage_key3, __storage_value);
 
           it++;
       }
