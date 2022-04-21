@@ -5,6 +5,8 @@
 hunter_add_package(CLI11)
 find_package(CLI11 REQUIRED)
 
+link_libraries( -levent)
+
 add_executable(ivmc-deamon deamon.cpp)
 add_executable(ivmc::deamon ALIAS ivmc-deamon)
 set_target_properties(ivmc-deamon PROPERTIES OUTPUT_NAME ivmcd)

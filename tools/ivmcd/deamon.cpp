@@ -21,6 +21,24 @@
 #include <unistd.h>
 #include <vector>
 
+#include <ios>
+#include <memory>
+#include <functional>
+
+#include <event2/event.h>
+#include <event2/http.h>
+#include <event2/thread.h>
+#include <event2/buffer.h>
+#include <event2/util.h>
+#include <event2/keyvalq_struct.h>
+
+#ifdef EVENT__HAVE_NETINET_IN_H
+#include <netinet/in.h>
+#ifdef _XOPEN_SOURCE_EXTENDED
+#include <arpa/inet.h>
+#endif
+#endif
+
 namespace
 {
 /// Returns the input str if already valid hex string. Otherwise, interprets the str as a file
@@ -56,6 +74,19 @@ void do_heartbeat(int count)
    // TODO: implement processing code to be performed on each heartbeat
    std::string s = "do_heartbeat daemon-name: " + std::to_string(count);
    syslog(LOG_NOTICE, s.c_str());
+}
+
+/** libevent event log callback */
+static void libevent_log_cb(int severity, const char *msg)
+{
+#ifndef EVENT_LOG_WARN
+// EVENT_LOG_WARN was added in 2.0.19; but before then _EVENT_LOG_WARN existed.
+# define EVENT_LOG_WARN _EVENT_LOG_WARN
+#endif
+    if (severity >= EVENT_LOG_WARN) // Log warn messages and higher without debug category
+        syslog(LOG_NOTICE, msg);
+    else
+        syslog(LOG_NOTICE, msg);
 }
 }  // namespace
 
@@ -117,8 +148,47 @@ int main(int argc, const char** argv)
   // Daemon-specific intialization should go here
   const int SLEEP_INTERVAL = 5;
 
+  //! Bound listening sockets
+  std::vector<evhttp_bound_socket *> boundSockets;
+  struct evhttp* http = 0;
+  struct event_base* base = 0;
+
+  // Redirect libevent's logging to our own log
+  // event_set_log_callback(&libevent_log_cb);
+
+  base = event_base_new(); // XXX RAII
+  if (!base) {
+      syslog(LOG_ERR, "Couldn't create an event_base: exiting");
+      return false;
+  }
+
+  /* Create a new evhttp object to handle requests. */
+  http = evhttp_new(base); // XXX RAII
+  if (!http) {
+      syslog(LOG_ERR, "couldn't create evhttp. Exiting.");
+      event_base_free(base);
+      return false;
+  }
+
+  // Bind addresses
+  int defaultPort = 5005;
+  std::vector<std::pair<std::string, uint16_t> > endpoints;
+  endpoints.push_back(std::make_pair("::1", defaultPort));
+  endpoints.push_back(std::make_pair("127.0.0.1", defaultPort));
+
+  for (std::vector<std::pair<std::string, uint16_t> >::iterator i = endpoints.begin(); i != endpoints.end(); ++i) {
+    evhttp_bound_socket *bind_handle = evhttp_bind_socket_with_handle(http, i->first.empty() ? NULL : i->first.c_str(), i->second);
+    if (bind_handle) {
+        boundSockets.push_back(bind_handle);
+    } else {
+        std::string s = "Binding RPC on address " + i->first + " port " + std::to_string(i->second) + " failed.\n";
+        syslog(LOG_ERR, s.c_str());
+        return false;
+    }
+  }
+
   // Enter daemon loop
-  int c = 0;
+  uint c = 0;
   while(1)
   {
     c = c + 1 > 65535 ? 0 : c + 1;
