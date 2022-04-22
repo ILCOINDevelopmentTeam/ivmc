@@ -2,6 +2,8 @@
 // Copyright 2019-2020 The IVMC Authors.
 // Licensed under the Apache License, Version 2.0.
 
+#include "deamon.h"
+
 #include <CLI/CLI.hpp>
 #include <ivmc/hex.hpp>
 #include <ivmc/loader.h>
@@ -14,16 +16,24 @@
 #include <cstring>
 #include <sstream>
 #include <iostream>
-#include <stdlib.h>
 #include <string>
-#include <sys/stat.h>
 #include <syslog.h>
 #include <unistd.h>
 #include <vector>
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <signal.h>
+#include <future>
+
 #include <ios>
 #include <memory>
 #include <functional>
+#include <cassert>
 
 #include <event2/event.h>
 #include <event2/http.h>
@@ -39,55 +49,373 @@
 #endif
 #endif
 
-namespace
+/** HTTP request work item */
+class HTTPWorkItem : public HTTPClosure
 {
-/// Returns the input str if already valid hex string. Otherwise, interprets the str as a file
-/// name and loads the file content.
-/// @todo The file content is expected to be a hex string but not validated.
-std::string load_hex(const std::string& str)
-{
-    const auto error_code = ivmc::validate_hex(str);
-    if (!error_code)
-        return str;
-
-    // Must be a file path.
-    std::ifstream file{str};
-    return std::string(std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{});
-}
-
-struct HexValidator : public CLI::Validator
-{
-    HexValidator() : CLI::Validator{"HEX"}
+public:
+    HTTPWorkItem(std::unique_ptr<HTTPRequest> _req, const std::string &_path, const HTTPRequestHandler& _func):
+        req(std::move(_req)), path(_path), func(_func)
     {
-        name_ = "HEX";
-        func_ = [](const std::string& str) -> std::string {
-            const auto error_code = ivmc::validate_hex(str);
-            if (error_code)
-                return error_code.message();
-            return {};
-        };
+    }
+    void operator()()
+    {
+        func(req.get(), path);
+    }
+
+    std::unique_ptr<HTTPRequest> req;
+
+private:
+    std::string path;
+    HTTPRequestHandler func;
+};
+
+/** Simple work queue for distributing work over multiple threads.
+ * Work items are simply callable objects.
+ */
+template <typename WorkItem>
+class WorkQueue
+{
+private:
+    /** Mutex protects entire object */
+    std::mutex cs;
+    std::condition_variable cond;
+    std::deque<std::unique_ptr<WorkItem>> queue;
+    bool running;
+    size_t maxDepth;
+    int numThreads;
+
+    /** RAII object to keep track of number of running worker threads */
+    class ThreadCounter
+    {
+    public:
+        WorkQueue &wq;
+        ThreadCounter(WorkQueue &w): wq(w)
+        {
+            std::lock_guard<std::mutex> lock(wq.cs);
+            wq.numThreads += 1;
+        }
+        ~ThreadCounter()
+        {
+            std::lock_guard<std::mutex> lock(wq.cs);
+            wq.numThreads -= 1;
+            wq.cond.notify_all();
+        }
+    };
+
+public:
+    WorkQueue(size_t _maxDepth) : running(true),
+                                 maxDepth(_maxDepth),
+                                 numThreads(0)
+    {
+    }
+    /** Precondition: worker threads have all stopped
+     * (call WaitExit)
+     */
+    ~WorkQueue()
+    {
+    }
+    /** Enqueue a work item */
+    bool Enqueue(WorkItem* item)
+    {
+        std::unique_lock<std::mutex> lock(cs);
+        if (queue.size() >= maxDepth) {
+            return false;
+        }
+        queue.emplace_back(std::unique_ptr<WorkItem>(item));
+        cond.notify_one();
+        return true;
+    }
+    /** Thread function */
+    void Run()
+    {
+        ThreadCounter count(*this);
+        while (true) {
+            std::unique_ptr<WorkItem> i;
+            {
+                std::unique_lock<std::mutex> lock(cs);
+                while (running && queue.empty())
+                    cond.wait(lock);
+                if (!running)
+                    break;
+                i = std::move(queue.front());
+                queue.pop_front();
+            }
+            (*i)();
+        }
+    }
+    /** Interrupt and exit loops */
+    void Interrupt()
+    {
+        std::unique_lock<std::mutex> lock(cs);
+        running = false;
+        cond.notify_all();
+    }
+    /** Wait for worker threads to exit */
+    void WaitExit()
+    {
+        std::unique_lock<std::mutex> lock(cs);
+        while (numThreads > 0)
+            cond.wait(lock);
+    }
+
+    /** Return current depth of queue */
+    size_t Depth()
+    {
+        std::unique_lock<std::mutex> lock(cs);
+        return queue.size();
     }
 };
 
-void do_heartbeat(int count)
+struct HTTPPathHandler
 {
-   // TODO: implement processing code to be performed on each heartbeat
-   std::string s = "do_heartbeat daemon-name: " + std::to_string(count);
-   syslog(LOG_NOTICE, s.c_str());
+    HTTPPathHandler() {}
+    HTTPPathHandler(std::string _prefix, bool _exactMatch, HTTPRequestHandler _handler):
+        prefix(_prefix), exactMatch(_exactMatch), handler(_handler)
+    {
+    }
+    std::string prefix;
+    bool exactMatch;
+    HTTPRequestHandler handler;
+};
+
+//! Handlers for (sub)paths
+std::vector<HTTPPathHandler> pathHandlers;
+static WorkQueue<HTTPClosure>* workQueue = 0;
+//! libevent event loop
+static struct event_base* eventBase = 0;
+//! HTTP server
+struct evhttp* eventHTTP = 0;
+
+/** HTTP request callback */
+static void http_request_cb(struct evhttp_request* req, void* arg)
+{
+    std::unique_ptr<HTTPRequest> hreq(new HTTPRequest(req));
+
+    // LogPrint("http", "Received a %s request for %s from %s\n", RequestMethodString(hreq->GetRequestMethod()), hreq->GetURI(), hreq->GetPeer().ToString());
+
+    // Early address-based allow check
+    // if (!ClientAllowed(hreq->GetPeer())) {
+    //     hreq->WriteReply(HTTP_FORBIDDEN);
+    //     return;
+    // }
+
+    // Early reject unknown HTTP methods
+    if (hreq->GetRequestMethod() == HTTPRequest::UNKNOWN) {
+        hreq->WriteReply(HTTP_BADMETHOD);
+        return;
+    }
+
+    // Find registered handler for prefix
+    std::string strURI = hreq->GetURI();
+    std::string path;
+    std::vector<HTTPPathHandler>::const_iterator i = pathHandlers.begin();
+    std::vector<HTTPPathHandler>::const_iterator iend = pathHandlers.end();
+    for (; i != iend; ++i) {
+        bool match = false;
+        if (i->exactMatch)
+            match = (strURI == i->prefix);
+        else
+            match = (strURI.substr(0, i->prefix.size()) == i->prefix);
+        if (match) {
+            path = strURI.substr(i->prefix.size());
+            break;
+        }
+    }
+
+    // Dispatch to worker thread
+    if (i != iend) {
+        std::unique_ptr<HTTPWorkItem> item(new HTTPWorkItem(std::move(hreq), path, i->handler));
+        assert(workQueue);
+        if (workQueue->Enqueue(item.get()))
+            item.release(); // if true, queue took ownership
+        else {
+            // LogPrintf("WARNING: request rejected because http work queue depth exceeded, it can be increased with the -rpcworkqueue= setting\n");
+            item->req->WriteReply(HTTP_INTERNAL, "Work queue depth exceeded");
+        }
+    } else {
+        hreq->WriteReply(HTTP_NOTFOUND);
+    }
 }
 
-/** libevent event log callback */
-static void libevent_log_cb(int severity, const char *msg)
+struct event_base* EventBase()
 {
+    return eventBase;
+}
+
+static void httpevent_callback_fn(evutil_socket_t, short, void* data)
+{
+    // Static handler: simply call inner handler
+    HTTPEvent *self = ((HTTPEvent*)data);
+    self->handler();
+    if (self->deleteWhenTriggered)
+        delete self;
+}
+
+HTTPEvent::HTTPEvent(struct event_base* base, bool _deleteWhenTriggered, const std::function<void(void)>& _handler): deleteWhenTriggered(_deleteWhenTriggered), handler(_handler)
+{
+    ev = event_new(base, -1, 0, httpevent_callback_fn, this);
+    assert(ev);
+}
+
+HTTPEvent::~HTTPEvent()
+{
+    event_free(ev);
+}
+
+void HTTPEvent::trigger(struct timeval* tv)
+{
+    if (tv == NULL)
+        event_active(ev, 0, 0); // immediately trigger event in main thread
+    else
+        evtimer_add(ev, tv); // trigger after timeval passed
+}
+
+HTTPRequest::HTTPRequest(struct evhttp_request* _req) : req(_req), replySent(false)
+{
+}
+
+HTTPRequest::~HTTPRequest()
+{
+    if (!replySent) {
+        // Keep track of whether reply was sent to avoid request leaks
+        // LogPrintf("%s: Unhandled request\n", __func__);
+        WriteReply(HTTP_INTERNAL, "Unhandled request");
+    }
+    // evhttpd cleans up the request, as long as a reply was sent.
+}
+
+std::pair<bool, std::string> HTTPRequest::GetHeader(const std::string& hdr)
+{
+    const struct evkeyvalq* headers = evhttp_request_get_input_headers(req);
+    assert(headers);
+    const char* val = evhttp_find_header(headers, hdr.c_str());
+    if (val)
+        return std::make_pair(true, val);
+    else
+        return std::make_pair(false, "");
+}
+
+std::string HTTPRequest::ReadBody()
+{
+    struct evbuffer* buf = evhttp_request_get_input_buffer(req);
+    if (!buf)
+        return "";
+    size_t size = evbuffer_get_length(buf);
+    /** Trivial implementation: if this is ever a performance bottleneck,
+     * internal copying can be avoided in multi-segment buffers by using
+     * evbuffer_peek and an awkward loop. Though in that case, it'd be even
+     * better to not copy into an intermediate string but use a stream
+     * abstraction to consume the evbuffer on the fly in the parsing algorithm.
+     */
+    const char* data = (const char*)evbuffer_pullup(buf, size);
+    if (!data) // returns NULL in case of empty buffer
+        return "";
+    std::string rv(data, size);
+    evbuffer_drain(buf, size);
+    return rv;
+}
+
+void HTTPRequest::WriteHeader(const std::string& hdr, const std::string& value)
+{
+    struct evkeyvalq* headers = evhttp_request_get_output_headers(req);
+    assert(headers);
+    evhttp_add_header(headers, hdr.c_str(), value.c_str());
+}
+
+/** Closure sent to main thread to request a reply to be sent to
+ * a HTTP request.
+ * Replies must be sent in the main loop in the main http thread,
+ * this cannot be done from worker threads.
+ */
+void HTTPRequest::WriteReply(int nStatus, const std::string& strReply)
+{
+    assert(!replySent && req);
+    // Send event to main http thread to send reply message
+    struct evbuffer* evb = evhttp_request_get_output_buffer(req);
+    assert(evb);
+    evbuffer_add(evb, strReply.data(), strReply.size());
+    HTTPEvent* ev = new HTTPEvent(eventBase, true,
+        std::bind(evhttp_send_reply, req, nStatus, (const char*)NULL, (struct evbuffer *)NULL));
+    ev->trigger(0);
+    replySent = true;
+    req = 0; // transferred back to main thread
+}
+
+std::string HTTPRequest::GetURI()
+{
+    return evhttp_request_get_uri(req);
+}
+
+HTTPRequest::RequestMethod HTTPRequest::GetRequestMethod()
+{
+    switch (evhttp_request_get_command(req)) {
+    case EVHTTP_REQ_GET:
+        return GET;
+        break;
+    case EVHTTP_REQ_POST:
+        return POST;
+        break;
+    case EVHTTP_REQ_HEAD:
+        return HEAD;
+        break;
+    case EVHTTP_REQ_PUT:
+        return PUT;
+        break;
+    default:
+        return UNKNOWN;
+        break;
+    }
+}
+
+namespace
+{
+  /// Returns the input str if already valid hex string. Otherwise, interprets the str as a file
+  /// name and loads the file content.
+  /// @todo The file content is expected to be a hex string but not validated.
+  std::string load_hex(const std::string& str)
+  {
+      const auto error_code = ivmc::validate_hex(str);
+      if (!error_code)
+          return str;
+
+      // Must be a file path.
+      std::ifstream file{str};
+      return std::string(std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{});
+  }
+
+  struct HexValidator : public CLI::Validator
+  {
+      HexValidator() : CLI::Validator{"HEX"}
+      {
+          name_ = "HEX";
+          func_ = [](const std::string& str) -> std::string {
+              const auto error_code = ivmc::validate_hex(str);
+              if (error_code)
+                  return error_code.message();
+              return {};
+          };
+      }
+  };
+
+  void do_heartbeat(int count)
+  {
+     // TODO: implement processing code to be performed on each heartbeat
+     std::string s = "do_heartbeat daemon-name: " + std::to_string(count);
+     syslog(LOG_NOTICE, s.c_str());
+  }
+
+  /** libevent event log callback */
+  static void libevent_log_cb(int severity, const char *msg)
+  {
 #ifndef EVENT_LOG_WARN
-// EVENT_LOG_WARN was added in 2.0.19; but before then _EVENT_LOG_WARN existed.
+  // EVENT_LOG_WARN was added in 2.0.19; but before then _EVENT_LOG_WARN existed.
 # define EVENT_LOG_WARN _EVENT_LOG_WARN
 #endif
     if (severity >= EVENT_LOG_WARN) // Log warn messages and higher without debug category
         syslog(LOG_NOTICE, msg);
-    else
-        syslog(LOG_NOTICE, msg);
-}
+    else syslog(LOG_NOTICE, msg);
+  }
+
 }  // namespace
 
 int main(int argc, const char** argv)
@@ -170,6 +498,11 @@ int main(int argc, const char** argv)
       return false;
   }
 
+  evhttp_set_timeout(http, DEFAULT_HTTP_SERVER_TIMEOUT);
+  evhttp_set_max_headers_size(http, MAX_HEADERS_SIZE);
+  evhttp_set_max_body_size(http, MAX_SIZE);
+  evhttp_set_gencb(http, http_request_cb, NULL);
+
   // Bind addresses
   int defaultPort = 5005;
   std::vector<std::pair<std::string, uint16_t> > endpoints;
@@ -181,11 +514,19 @@ int main(int argc, const char** argv)
     if (bind_handle) {
         boundSockets.push_back(bind_handle);
     } else {
+        evhttp_free(http);
+        event_base_free(base);
+
         std::string s = "Binding RPC on address " + i->first + " port " + std::to_string(i->second) + " failed.\n";
         syslog(LOG_ERR, s.c_str());
         return false;
     }
   }
+
+  int workQueueDepth = std::max((long)DEFAULT_HTTP_WORKQUEUE, 1L);
+  workQueue = new WorkQueue<HTTPClosure>(workQueueDepth);
+  eventBase = base;
+  eventHTTP = http;
 
   // Enter daemon loop
   uint c = 0;
