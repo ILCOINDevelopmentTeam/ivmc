@@ -177,13 +177,28 @@ struct HTTPPathHandler
     HTTPRequestHandler handler;
 };
 
-//! Handlers for (sub)paths
-std::vector<HTTPPathHandler> pathHandlers;
-static WorkQueue<HTTPClosure>* workQueue = 0;
 //! libevent event loop
 static struct event_base* eventBase = 0;
 //! HTTP server
 struct evhttp* eventHTTP = 0;
+//! Work queue for handling longer requests off the event loop thread
+static WorkQueue<HTTPClosure>* workQueue = 0;
+//! Handlers for (sub)paths
+std::vector<HTTPPathHandler> pathHandlers;
+//! Bound listening sockets
+std::vector<evhttp_bound_socket *> boundSockets;
+
+/** Check if a network address is allowed to access the HTTP server */
+static bool ClientAllowed()
+{
+    return true;
+}
+
+/** Initialize ACL list for HTTP server */
+static bool InitHTTPAllowList()
+{
+    return true;
+}
 
 /** HTTP request method as string - use for logging only */
 static std::string RequestMethodString(HTTPRequest::RequestMethod m)
@@ -210,9 +225,7 @@ static std::string RequestMethodString(HTTPRequest::RequestMethod m)
 static void http_request_cb(struct evhttp_request* req, void* arg)
 {
     std::unique_ptr<HTTPRequest> hreq(new HTTPRequest(req));
-
-    std::string slog = "Received a " + RequestMethodString(hreq->GetRequestMethod()) + " request for " + hreq->GetURI();
-    syslog(LOG_NOTICE, slog.c_str());
+    syslog(LOG_NOTICE, ("Received a " + RequestMethodString(hreq->GetRequestMethod()) + " request for " + hreq->GetURI()).c_str());
     // Early reject unknown HTTP methods
     if (hreq->GetRequestMethod() == HTTPRequest::UNKNOWN) {
         hreq->WriteReply(HTTP_BADMETHOD);
@@ -249,6 +262,195 @@ static void http_request_cb(struct evhttp_request* req, void* arg)
     } else {
         hreq->WriteReply(HTTP_NOTFOUND);
     }
+}
+
+/** Callback to reject HTTP requests after shutdown. */
+static void http_reject_request_cb(struct evhttp_request* req, void*)
+{
+    syslog(LOG_NOTICE, "http: Rejecting request while shutting down.");
+    evhttp_send_error(req, HTTP_SERVUNAVAIL, NULL);
+}
+
+void RenameThread(const char* name)
+{
+#if defined(PR_SET_NAME)
+    // Only the first 15 characters are used (16 - NUL terminator)
+    ::prctl(PR_SET_NAME, name, 0, 0, 0);
+#elif (defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__DragonFly__))
+    pthread_set_name_np(pthread_self(), name);
+
+#elif defined(MAC_OSX)
+    pthread_setname_np(name);
+#else
+    // Prevent warnings for unused parameters...
+    (void)name;
+#endif
+}
+
+/** Event dispatcher thread */
+static bool ThreadHTTP(struct event_base* base, struct evhttp* http)
+{
+    RenameThread("ilcoin-http");
+    syslog(LOG_NOTICE, "http: Entering http event loop.");
+    event_base_dispatch(base);
+    // Event loop will be interrupted by InterruptHTTPServer()
+    syslog(LOG_NOTICE, "http: Exited http event loop.");
+    return event_base_got_break(base) == 0;
+}
+
+/** Bind HTTP server to specified addresses */
+static bool HTTPBindAddresses(struct evhttp* http)
+{
+    int defaultPort = DEFAULT_PORT;
+    std::vector<std::pair<std::string, uint16_t> > endpoints;
+
+    // Determine what addresses to bind to
+    endpoints.push_back(std::make_pair("::1", defaultPort));
+    endpoints.push_back(std::make_pair("127.0.0.1", defaultPort));
+
+    // Bind addresses
+    for (std::vector<std::pair<std::string, uint16_t> >::iterator i = endpoints.begin(); i != endpoints.end(); ++i) {
+        syslog(LOG_NOTICE, ("http: Binding RPC on address " + i->first + " port " + std::to_string(i->second) + ".").c_str());
+        evhttp_bound_socket *bind_handle = evhttp_bind_socket_with_handle(http, i->first.empty() ? NULL : i->first.c_str(), i->second);
+        if (bind_handle) {
+            boundSockets.push_back(bind_handle);
+        } else {
+            syslog(LOG_ERR, ("Binding RPC on address " + i->first + " port " + std::to_string(i->second) + " failed.").c_str());
+        }
+    }
+    return !boundSockets.empty();
+}
+
+/** Simple wrapper to set thread name and run work queue */
+static void HTTPWorkQueueRun(WorkQueue<HTTPClosure>* queue)
+{
+    RenameThread("ilcoin-httpworker");
+    queue->Run();
+}
+
+/** libevent event log callback */
+static void libevent_log_cb(int severity, const char *msg)
+{
+#ifndef EVENT_LOG_WARN
+// EVENT_LOG_WARN was added in 2.0.19; but before then _EVENT_LOG_WARN existed.
+# define EVENT_LOG_WARN _EVENT_LOG_WARN
+#endif
+  if (severity >= EVENT_LOG_WARN) // Log warn messages and higher without debug category
+      syslog(LOG_NOTICE, msg);
+  else syslog(LOG_NOTICE, msg);
+}
+
+bool InitHTTPServer()
+{
+    struct evhttp* http = 0;
+    struct event_base* base = 0;
+
+    if (!InitHTTPAllowList())
+        return false;
+
+    evthread_use_pthreads();
+
+    base = event_base_new(); // XXX RAII
+    if (!base) {
+        syslog(LOG_ERR, "Couldn't create an event_base: exiting");
+        return false;
+    }
+
+    /* Create a new evhttp object to handle requests. */
+    http = evhttp_new(base); // XXX RAII
+    if (!http) {
+        syslog(LOG_ERR, "couldn't create evhttp. Exiting.");
+        event_base_free(base);
+        return false;
+    }
+
+    evhttp_set_timeout(http, DEFAULT_HTTP_SERVER_TIMEOUT);
+    evhttp_set_max_headers_size(http, MAX_HEADERS_SIZE);
+    evhttp_set_max_body_size(http, MAX_SIZE);
+    evhttp_set_gencb(http, http_request_cb, NULL);
+
+    if (!HTTPBindAddresses(http)) {
+        syslog(LOG_ERR, "Unable to bind any endpoint for RPC server");
+        evhttp_free(http);
+        event_base_free(base);
+        return false;
+    }
+
+    syslog(LOG_NOTICE, "http: Initialized HTTP server.");
+    int workQueueDepth = std::max((long)DEFAULT_HTTP_WORKQUEUE, 1L);
+    syslog(LOG_NOTICE, ("http: creating work queue of depth " + std::to_string(workQueueDepth)).c_str());
+
+    workQueue = new WorkQueue<HTTPClosure>(workQueueDepth);
+    eventBase = base;
+    eventHTTP = http;
+    return true;
+}
+
+std::thread threadHTTP;
+std::future<bool> threadResult;
+
+bool StartHTTPServer()
+{
+    syslog(LOG_NOTICE, "http: Starting HTTP server.");
+    int rpcThreads = std::max((long)DEFAULT_HTTP_THREADS, 1L);
+    syslog(LOG_NOTICE, ("http: starting " + std::to_string(rpcThreads) + " worker threads.").c_str());
+    std::packaged_task<bool(event_base*, evhttp*)> task(ThreadHTTP);
+    threadResult = task.get_future();
+    threadHTTP = std::thread(std::move(task), eventBase, eventHTTP);
+
+    for (int i = 0; i < rpcThreads; i++) {
+        std::thread rpc_worker(HTTPWorkQueueRun, workQueue);
+        rpc_worker.detach();
+    }
+    return true;
+}
+
+void InterruptHTTPServer()
+{
+    syslog(LOG_NOTICE, "http: Interrupting HTTP server.");
+    if (eventHTTP) {
+        // Unlisten sockets
+        for (evhttp_bound_socket *socket : boundSockets) {
+            evhttp_del_accept_socket(eventHTTP, socket);
+        }
+        // Reject requests on current connections
+        evhttp_set_gencb(eventHTTP, http_reject_request_cb, NULL);
+    }
+    if (workQueue)
+        workQueue->Interrupt();
+}
+
+void StopHTTPServer()
+{
+    syslog(LOG_NOTICE, "http: Stopping HTTP server.");
+    if (workQueue) {
+        syslog(LOG_NOTICE, "http: Waiting for HTTP worker threads to exit.");
+        workQueue->WaitExit();
+        delete workQueue;
+    }
+    if (eventBase) {
+        syslog(LOG_NOTICE, "Waiting for HTTP event thread to exit.");
+        // Give event loop a few seconds to exit (to send back last RPC responses), then break it
+        // Before this was solved with event_base_loopexit, but that didn't work as expected in
+        // at least libevent 2.0.21 and always introduced a delay. In libevent
+        // master that appears to be solved, so in the future that solution
+        // could be used again (if desirable).
+        // (see discussion in https://github.com/ilcoin/ilcoin/pull/6990)
+        if (threadResult.valid() && threadResult.wait_for(std::chrono::milliseconds(2000)) == std::future_status::timeout) {
+            syslog(LOG_NOTICE, "HTTP event loop did not exit within allotted time, sending loopbreak.");
+            event_base_loopbreak(eventBase);
+        }
+        threadHTTP.join();
+    }
+    if (eventHTTP) {
+        evhttp_free(eventHTTP);
+        eventHTTP = 0;
+    }
+    if (eventBase) {
+        event_base_free(eventBase);
+        eventBase = 0;
+    }
+    syslog(LOG_NOTICE, "Stopped HTTP server.");
 }
 
 struct event_base* EventBase()
@@ -381,6 +583,26 @@ HTTPRequest::RequestMethod HTTPRequest::GetRequestMethod()
     }
 }
 
+void RegisterHTTPHandler(const std::string &prefix, bool exactMatch, const HTTPRequestHandler &handler)
+{
+    syslog(LOG_NOTICE, ("http: Registering HTTP handler for " + prefix + " (exactmatch " + std::to_string(exactMatch) + ")").c_str());
+    pathHandlers.push_back(HTTPPathHandler(prefix, exactMatch, handler));
+}
+
+void UnregisterHTTPHandler(const std::string &prefix, bool exactMatch)
+{
+    std::vector<HTTPPathHandler>::iterator i = pathHandlers.begin();
+    std::vector<HTTPPathHandler>::iterator iend = pathHandlers.end();
+    for (; i != iend; ++i)
+        if (i->prefix == prefix && i->exactMatch == exactMatch)
+            break;
+    if (i != iend)
+    {
+        syslog(LOG_NOTICE, ("http: Unregistering HTTP handler for " + prefix + " (exactmatch " + std::to_string(exactMatch) + ")").c_str());
+        pathHandlers.erase(i);
+    }
+}
+
 namespace
 {
   /// Returns the input str if already valid hex string. Otherwise, interprets the str as a file
@@ -414,20 +636,7 @@ namespace
   void do_heartbeat(int count)
   {
      // TODO: implement processing code to be performed on each heartbeat
-     std::string s = "do_heartbeat daemon-name: " + std::to_string(count);
-     syslog(LOG_NOTICE, s.c_str());
-  }
-
-  /** libevent event log callback */
-  static void libevent_log_cb(int severity, const char *msg)
-  {
-#ifndef EVENT_LOG_WARN
-  // EVENT_LOG_WARN was added in 2.0.19; but before then _EVENT_LOG_WARN existed.
-# define EVENT_LOG_WARN _EVENT_LOG_WARN
-#endif
-    if (severity >= EVENT_LOG_WARN) // Log warn messages and higher without debug category
-        syslog(LOG_NOTICE, msg);
-    else syslog(LOG_NOTICE, msg);
+     syslog(LOG_NOTICE, ("do_heartbeat daemon-name: " + std::to_string(count)).c_str());
   }
 
 }  // namespace
@@ -490,57 +699,17 @@ int main(int argc, const char** argv)
   // Daemon-specific intialization should go here
   const int SLEEP_INTERVAL = 5;
 
-  //! Bound listening sockets
-  std::vector<evhttp_bound_socket *> boundSockets;
-  struct evhttp* http = 0;
-  struct event_base* base = 0;
-
-  // Redirect libevent's logging to our own log
-  // event_set_log_callback(&libevent_log_cb);
-
-  base = event_base_new(); // XXX RAII
-  if (!base) {
-      syslog(LOG_ERR, "Couldn't create an event_base: exiting");
+  // Init Server
+  if (!InitHTTPServer())
       return false;
-  }
-
-  /* Create a new evhttp object to handle requests. */
-  http = evhttp_new(base); // XXX RAII
-  if (!http) {
-      syslog(LOG_ERR, "couldn't create evhttp. Exiting.");
-      event_base_free(base);
+  // if (!StartRPC())
+  //     return false;
+  // if (!StartHTTPRPC())
+  //     return false;
+  // if (GetBoolArg("-rest", DEFAULT_REST_ENABLE) && !StartREST())
+  //     return false;
+  if (!StartHTTPServer())
       return false;
-  }
-
-  evhttp_set_timeout(http, DEFAULT_HTTP_SERVER_TIMEOUT);
-  evhttp_set_max_headers_size(http, MAX_HEADERS_SIZE);
-  evhttp_set_max_body_size(http, MAX_SIZE);
-  evhttp_set_gencb(http, http_request_cb, NULL);
-
-  // Bind addresses
-  int defaultPort = 5005;
-  std::vector<std::pair<std::string, uint16_t> > endpoints;
-  endpoints.push_back(std::make_pair("::1", defaultPort));
-  endpoints.push_back(std::make_pair("127.0.0.1", defaultPort));
-
-  for (std::vector<std::pair<std::string, uint16_t> >::iterator i = endpoints.begin(); i != endpoints.end(); ++i) {
-    evhttp_bound_socket *bind_handle = evhttp_bind_socket_with_handle(http, i->first.empty() ? NULL : i->first.c_str(), i->second);
-    if (bind_handle) {
-        boundSockets.push_back(bind_handle);
-    } else {
-        evhttp_free(http);
-        event_base_free(base);
-
-        std::string s = "Binding RPC on address " + i->first + " port " + std::to_string(i->second) + " failed.\n";
-        syslog(LOG_ERR, s.c_str());
-        return false;
-    }
-  }
-
-  int workQueueDepth = std::max((long)DEFAULT_HTTP_WORKQUEUE, 1L);
-  workQueue = new WorkQueue<HTTPClosure>(workQueueDepth);
-  eventBase = base;
-  eventHTTP = http;
 
   // Enter daemon loop
   uint c = 0;

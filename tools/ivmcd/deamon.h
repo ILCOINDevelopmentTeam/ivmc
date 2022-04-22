@@ -8,11 +8,12 @@
 #include <stdint.h>
 #include <functional>
 
-static const int DEFAULT_HTTP_THREADS=4;
-static const int DEFAULT_HTTP_WORKQUEUE=16;
-static const int DEFAULT_HTTP_SERVER_TIMEOUT=30;
-static const size_t MAX_HEADERS_SIZE = 8192;
-static const unsigned int MAX_SIZE = 0x44000000;
+static const int DEFAULT_HTTP_THREADS        = 4;
+static const int DEFAULT_HTTP_WORKQUEUE      = 16;
+static const int DEFAULT_HTTP_SERVER_TIMEOUT = 30;
+static const int DEFAULT_PORT                = 5005;
+static const size_t MAX_HEADERS_SIZE         = 8192;
+static const unsigned int MAX_SIZE           = 0x44000000;
 
 struct evhttp_request;
 struct event_base;
