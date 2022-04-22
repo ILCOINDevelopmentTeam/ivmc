@@ -1,5 +1,5 @@
-// Copyright (c) 2015-2016 The Ilcoin Core developers
-// All Rights Reserved. ILCoin Blockchain Project 2019©
+// IVMC: Ethereum Client-VM Connector API.
+// Copyright 2019-2022 The IVMC Authors.
 
 #ifndef ILCOIN_HTTPSERVER_H
 #define ILCOIN_HTTPSERVER_H

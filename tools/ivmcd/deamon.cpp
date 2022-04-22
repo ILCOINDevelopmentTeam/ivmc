@@ -1,6 +1,5 @@
 // IVMC: Ethereum Client-VM Connector API.
-// Copyright 2019-2020 The IVMC Authors.
-// Licensed under the Apache License, Version 2.0.
+// Copyright 2019-2022 The IVMC Authors.
 
 #include "deamon.h"
 
@@ -186,19 +185,34 @@ static struct event_base* eventBase = 0;
 //! HTTP server
 struct evhttp* eventHTTP = 0;
 
+/** HTTP request method as string - use for logging only */
+static std::string RequestMethodString(HTTPRequest::RequestMethod m)
+{
+    switch (m) {
+    case HTTPRequest::GET:
+        return "GET";
+        break;
+    case HTTPRequest::POST:
+        return "POST";
+        break;
+    case HTTPRequest::HEAD:
+        return "HEAD";
+        break;
+    case HTTPRequest::PUT:
+        return "PUT";
+        break;
+    default:
+        return "unknown";
+    }
+}
+
 /** HTTP request callback */
 static void http_request_cb(struct evhttp_request* req, void* arg)
 {
     std::unique_ptr<HTTPRequest> hreq(new HTTPRequest(req));
 
-    // LogPrint("http", "Received a %s request for %s from %s\n", RequestMethodString(hreq->GetRequestMethod()), hreq->GetURI(), hreq->GetPeer().ToString());
-
-    // Early address-based allow check
-    // if (!ClientAllowed(hreq->GetPeer())) {
-    //     hreq->WriteReply(HTTP_FORBIDDEN);
-    //     return;
-    // }
-
+    std::string slog = "Received a " + RequestMethodString(hreq->GetRequestMethod()) + " request for " + hreq->GetURI();
+    syslog(LOG_NOTICE, slog.c_str());
     // Early reject unknown HTTP methods
     if (hreq->GetRequestMethod() == HTTPRequest::UNKNOWN) {
         hreq->WriteReply(HTTP_BADMETHOD);
@@ -229,7 +243,7 @@ static void http_request_cb(struct evhttp_request* req, void* arg)
         if (workQueue->Enqueue(item.get()))
             item.release(); // if true, queue took ownership
         else {
-            // LogPrintf("WARNING: request rejected because http work queue depth exceeded, it can be increased with the -rpcworkqueue= setting\n");
+            syslog(LOG_WARNING, "WARNING: request rejected because http work queue depth exceeded, it can be increased with the -rpcworkqueue= setting");
             item->req->WriteReply(HTTP_INTERNAL, "Work queue depth exceeded");
         }
     } else {
@@ -278,7 +292,7 @@ HTTPRequest::~HTTPRequest()
 {
     if (!replySent) {
         // Keep track of whether reply was sent to avoid request leaks
-        // LogPrintf("%s: Unhandled request\n", __func__);
+        syslog(LOG_ERR, "HTTPRequest(): Unhandled request");
         WriteReply(HTTP_INTERNAL, "Unhandled request");
     }
     // evhttpd cleans up the request, as long as a reply was sent.
