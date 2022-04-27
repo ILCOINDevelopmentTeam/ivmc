@@ -30,7 +30,7 @@
 #include <future>
 
 #include <ios>
-#include <memory>
+#include <memory> // for unique_ptr
 #include <functional>
 #include <cassert>
 
@@ -41,6 +41,14 @@
 #include <event2/util.h>
 #include <event2/keyvalq_struct.h>
 
+#include <boost/bind.hpp>
+#include <boost/filesystem.hpp>
+#include <boost/foreach.hpp>
+#include <boost/shared_ptr.hpp>
+#include <boost/signals2/signal.hpp>
+#include <boost/thread.hpp>
+#include <boost/algorithm/string/case_conv.hpp> // for to_upper()
+
 #ifdef EVENT__HAVE_NETINET_IN_H
 #include <netinet/in.h>
 #ifdef _XOPEN_SOURCE_EXTENDED
@@ -48,6 +56,7 @@
 #endif
 #endif
 
+// --------------------------------- StartHTTPServer
 /** HTTP request work item */
 class HTTPWorkItem : public HTTPClosure
 {
@@ -500,7 +509,7 @@ HTTPRequest::~HTTPRequest()
     // evhttpd cleans up the request, as long as a reply was sent.
 }
 
-std::pair<bool, std::string> HTTPRequest::GetHeader(const std::string& hdr)
+std::pair<bool, std::string> HTTPRequest::GetHeader(const std::string &hdr)
 {
     const struct evkeyvalq* headers = evhttp_request_get_input_headers(req);
     assert(headers);
@@ -531,7 +540,7 @@ std::string HTTPRequest::ReadBody()
     return rv;
 }
 
-void HTTPRequest::WriteHeader(const std::string& hdr, const std::string& value)
+void HTTPRequest::WriteHeader(const std::string &hdr, const std::string &value)
 {
     struct evkeyvalq* headers = evhttp_request_get_output_headers(req);
     assert(headers);
@@ -543,7 +552,7 @@ void HTTPRequest::WriteHeader(const std::string& hdr, const std::string& value)
  * Replies must be sent in the main loop in the main http thread,
  * this cannot be done from worker threads.
  */
-void HTTPRequest::WriteReply(int nStatus, const std::string& strReply)
+void HTTPRequest::WriteReply(int nStatus, const std::string &strReply)
 {
     assert(!replySent && req);
     // Send event to main http thread to send reply message
@@ -603,12 +612,692 @@ void UnregisterHTTPHandler(const std::string &prefix, bool exactMatch)
     }
 }
 
+// --------------------------------- StartRPC
+static bool fRPCRunning = false;
+static bool fRPCInWarmup = true;
+static std::string rpcWarmupStatus("RPC server started");
+// static CCriticalSection cs_rpcWarmup;
+/* Map of name to timer. */
+// static std::map<std::string, std::unique_ptr<RPCTimerBase> > deadlineTimers;
+
+const UniValue NullUniValue;
+
+const signed char p_util_hexdigit[256] =
+{ -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  0,1,2,3,4,5,6,7,8,9,-1,-1,-1,-1,-1,-1,
+  -1,0xa,0xb,0xc,0xd,0xe,0xf,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,0xa,0xb,0xc,0xd,0xe,0xf,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1, };
+
+signed char HexDigit(char c)
+{
+    return p_util_hexdigit[(unsigned char)c];
+}
+
+bool IsHex(const std::string &str)
+{
+    for(std::string::const_iterator it(str.begin()); it != str.end(); ++it)
+    {
+        if (HexDigit(*it) < 0)
+            return false;
+    }
+    return (str.size() > 0) && (str.size()%2 == 0);
+}
+
+std::vector<unsigned char> ParseHex(const char* psz)
+{
+    // convert hex dump to std::vector
+    std::vector<unsigned char> vch;
+    while (true)
+    {
+        while (isspace(*psz))
+            psz++;
+        signed char c = HexDigit(*psz++);
+        if (c == (signed char)-1)
+            break;
+        unsigned char n = (c << 4);
+        c = HexDigit(*psz++);
+        if (c == (signed char)-1)
+            break;
+        n |= c;
+        vch.push_back(n);
+    }
+    return vch;
+}
+
+std::vector<unsigned char> ParseHex(const std::string& str)
+{
+    return ParseHex(str.c_str());
+}
+
+static inline bool json_isspace(int ch)
+{
+    switch (ch) {
+    case 0x20:
+    case 0x09:
+    case 0x0a:
+    case 0x0d:
+        return true;
+
+    default:
+        return false;
+    }
+
+    // not reached
+}
+
+static bool json_isdigit(int ch)
+{
+    return ((ch >= '0') && (ch <= '9'));
+}
+
+// convert hexadecimal string to unsigned integer
+static const char *hatoui(const char *first, const char *last,
+                          unsigned int& out)
+{
+    unsigned int result = 0;
+    for (; first != last; ++first)
+    {
+        int digit;
+        if (json_isdigit(*first))
+            digit = *first - '0';
+
+        else if (*first >= 'a' && *first <= 'f')
+            digit = *first - 'a' + 10;
+
+        else if (*first >= 'A' && *first <= 'F')
+            digit = *first - 'A' + 10;
+
+        else
+            break;
+
+        result = 16 * result + digit;
+    }
+    out = result;
+
+    return first;
+}
+
+enum jtokentype getJsonToken(std::string& tokenVal, unsigned int& consumed,
+                            const char *raw)
+{
+    tokenVal.clear();
+    consumed = 0;
+
+    const char *rawStart = raw;
+
+    while ((*raw) && (json_isspace(*raw)))             // skip whitespace
+        raw++;
+
+    switch (*raw) {
+
+    case 0:
+        return JTOK_NONE;
+
+    case '{':
+        raw++;
+        consumed = (raw - rawStart);
+        return JTOK_OBJ_OPEN;
+    case '}':
+        raw++;
+        consumed = (raw - rawStart);
+        return JTOK_OBJ_CLOSE;
+    case '[':
+        raw++;
+        consumed = (raw - rawStart);
+        return JTOK_ARR_OPEN;
+    case ']':
+        raw++;
+        consumed = (raw - rawStart);
+        return JTOK_ARR_CLOSE;
+
+    case ':':
+        raw++;
+        consumed = (raw - rawStart);
+        return JTOK_COLON;
+    case ',':
+        raw++;
+        consumed = (raw - rawStart);
+        return JTOK_COMMA;
+
+    case 'n':
+    case 't':
+    case 'f':
+        if (!strncmp(raw, "null", 4)) {
+            raw += 4;
+            consumed = (raw - rawStart);
+            return JTOK_KW_NULL;
+        } else if (!strncmp(raw, "true", 4)) {
+            raw += 4;
+            consumed = (raw - rawStart);
+            return JTOK_KW_TRUE;
+        } else if (!strncmp(raw, "false", 5)) {
+            raw += 5;
+            consumed = (raw - rawStart);
+            return JTOK_KW_FALSE;
+        } else
+            return JTOK_ERR;
+
+    case '-':
+    case '0':
+    case '1':
+    case '2':
+    case '3':
+    case '4':
+    case '5':
+    case '6':
+    case '7':
+    case '8':
+    case '9': {
+        // part 1: int
+        std::string numStr;
+
+        const char *first = raw;
+
+        const char *firstDigit = first;
+        if (!json_isdigit(*firstDigit))
+            firstDigit++;
+        if ((*firstDigit == '0') && json_isdigit(firstDigit[1]))
+            return JTOK_ERR;
+
+        numStr += *raw;                       // copy first char
+        raw++;
+
+        if ((*first == '-') && (!json_isdigit(*raw)))
+            return JTOK_ERR;
+
+        while ((*raw) && json_isdigit(*raw)) {     // copy digits
+            numStr += *raw;
+            raw++;
+        }
+
+        // part 2: frac
+        if (*raw == '.') {
+            numStr += *raw;                   // copy .
+            raw++;
+
+            if (!json_isdigit(*raw))
+                return JTOK_ERR;
+            while ((*raw) && json_isdigit(*raw)) { // copy digits
+                numStr += *raw;
+                raw++;
+            }
+        }
+
+        // part 3: exp
+        if (*raw == 'e' || *raw == 'E') {
+            numStr += *raw;                   // copy E
+            raw++;
+
+            if (*raw == '-' || *raw == '+') { // copy +/-
+                numStr += *raw;
+                raw++;
+            }
+
+            if (!json_isdigit(*raw))
+                return JTOK_ERR;
+            while ((*raw) && json_isdigit(*raw)) { // copy digits
+                numStr += *raw;
+                raw++;
+            }
+        }
+
+        tokenVal = numStr;
+        consumed = (raw - rawStart);
+        return JTOK_NUMBER;
+        }
+
+    case '"': {
+        raw++;                                // skip "
+
+        std::string valStr;
+        JSONUTF8StringFilter writer(valStr);
+
+        while (*raw) {
+            if ((unsigned char)*raw < 0x20)
+                return JTOK_ERR;
+
+            else if (*raw == '\\') {
+                raw++;                        // skip backslash
+
+                switch (*raw) {
+                case '"':  writer.push_back('\"'); break;
+                case '\\': writer.push_back('\\'); break;
+                case '/':  writer.push_back('/'); break;
+                case 'b':  writer.push_back('\b'); break;
+                case 'f':  writer.push_back('\f'); break;
+                case 'n':  writer.push_back('\n'); break;
+                case 'r':  writer.push_back('\r'); break;
+                case 't':  writer.push_back('\t'); break;
+
+                case 'u': {
+                    unsigned int codepoint;
+                    if (hatoui(raw + 1, raw + 1 + 4, codepoint) !=
+                               raw + 1 + 4)
+                        return JTOK_ERR;
+                    writer.push_back_u(codepoint);
+                    raw += 4;
+                    break;
+                    }
+                default:
+                    return JTOK_ERR;
+
+                }
+
+                raw++;                        // skip esc'd char
+            }
+
+            else if (*raw == '"') {
+                raw++;                        // skip "
+                break;                        // stop scanning
+            }
+
+            else {
+                writer.push_back(*raw);
+                raw++;
+            }
+        }
+
+        if (!writer.finalize())
+            return JTOK_ERR;
+        tokenVal = valStr;
+        consumed = (raw - rawStart);
+        return JTOK_STRING;
+        }
+
+    default:
+        return JTOK_ERR;
+    }
+}
+
+static bool validNumStr(const std::string& s)
+{
+    std::string tokenVal;
+    unsigned int consumed;
+    enum jtokentype tt = getJsonToken(tokenVal, consumed, s.c_str());
+    return (tt == JTOK_NUMBER);
+}
+
+void UniValue::clear()
+{
+    typ = VNULL;
+    val.clear();
+    keys.clear();
+    values.clear();
+}
+
+bool UniValue::setNull()
+{
+    clear();
+    return true;
+}
+
+bool UniValue::setBool(bool val_)
+{
+    clear();
+    typ = VBOOL;
+    if (val_)
+        val = "1";
+    return true;
+}
+
+bool UniValue::setNumStr(const std::string& val_)
+{
+    if (!validNumStr(val_))
+        return false;
+
+    clear();
+    typ = VNUM;
+    val = val_;
+    return true;
+}
+
+bool UniValue::setInt(uint64_t val_)
+{
+    std::ostringstream oss;
+
+    oss << val_;
+
+    return setNumStr(oss.str());
+}
+
+bool UniValue::setInt(int64_t val_)
+{
+    std::ostringstream oss;
+
+    oss << val_;
+
+    return setNumStr(oss.str());
+}
+
+bool UniValue::setFloat(double val_)
+{
+    std::ostringstream oss;
+
+    oss << std::setprecision(16) << val_;
+
+    bool ret = setNumStr(oss.str());
+    typ = VNUM;
+    return ret;
+}
+
+bool UniValue::setStr(const std::string& val_)
+{
+    clear();
+    typ = VSTR;
+    val = val_;
+    return true;
+}
+
+bool UniValue::setArray()
+{
+    clear();
+    typ = VARR;
+    return true;
+}
+
+bool UniValue::setObject()
+{
+    clear();
+    typ = VOBJ;
+    return true;
+}
+
+bool UniValue::push_back(const UniValue& val_)
+{
+    if (typ != VARR)
+        return false;
+
+    values.push_back(val_);
+    return true;
+}
+
+bool UniValue::pushKV(const std::string& key, const UniValue& val_)
+{
+    if (typ != VOBJ)
+        return false;
+
+    keys.push_back(key);
+    values.push_back(val_);
+    return true;
+}
+
+int UniValue::findKey(const std::string& key) const
+{
+    for (unsigned int i = 0; i < keys.size(); i++) {
+        if (keys[i] == key)
+            return (int) i;
+    }
+
+    return -1;
+}
+
+bool UniValue::checkObject(const std::map<std::string,UniValue::VType>& t)
+{
+    for (std::map<std::string,UniValue::VType>::const_iterator it = t.begin();
+         it != t.end(); ++it) {
+        int idx = findKey(it->first);
+        if (idx < 0)
+            return false;
+
+        if (values.at(idx).getType() != it->second)
+            return false;
+    }
+
+    return true;
+}
+
+const UniValue& UniValue::operator[](const std::string& key) const
+{
+    if (typ != VOBJ)
+        return NullUniValue;
+
+    int index = findKey(key);
+    if (index < 0)
+        return NullUniValue;
+
+    return values.at(index);
+}
+
+const UniValue& UniValue::operator[](unsigned int index) const
+{
+    if (typ != VOBJ && typ != VARR)
+        return NullUniValue;
+    if (index >= values.size())
+        return NullUniValue;
+
+    return values.at(index);
+}
+
+const char *uvTypeName(UniValue::VType t)
+{
+    switch (t) {
+    case UniValue::VNULL: return "null";
+    case UniValue::VBOOL: return "bool";
+    case UniValue::VOBJ: return "object";
+    case UniValue::VARR: return "array";
+    case UniValue::VSTR: return "string";
+    case UniValue::VNUM: return "number";
+    }
+
+    // not reached
+    return NULL;
+}
+
+const UniValue& find_value(const UniValue& obj, const std::string& name)
+{
+    for (unsigned int i = 0; i < obj.keys.size(); i++)
+        if (obj.keys[i] == name)
+            return obj.values.at(i);
+
+    return NullUniValue;
+}
+
+const std::vector<std::string>& UniValue::getKeys() const
+{
+    if (typ != VOBJ)
+        throw std::runtime_error("JSON value is not an object as expected");
+    return keys;
+}
+
+const std::vector<UniValue>& UniValue::getValues() const
+{
+    if (typ != VOBJ && typ != VARR)
+        throw std::runtime_error("JSON value is not an object or array as expected");
+    return values;
+}
+
+bool UniValue::get_bool() const
+{
+    if (typ != VBOOL)
+        throw std::runtime_error("JSON value is not a boolean as expected");
+    return getBool();
+}
+
+const std::string& UniValue::get_str() const
+{
+    if (typ != VSTR)
+        throw std::runtime_error("JSON value is not a string as expected");
+    return getValStr();
+}
+
+UniValue JSONRPCError(int code, const std::string &message)
+{
+    UniValue error(UniValue::VOBJ);
+    error.push_back(Pair("code", code));
+    error.push_back(Pair("message", message));
+    return error;
+}
+
+static struct CRPCSignals
+{
+    boost::signals2::signal<void ()> Started;
+    boost::signals2::signal<void ()> Stopped;
+    boost::signals2::signal<void (const CRPCCommand&)> PreCommand;
+    boost::signals2::signal<void (const CRPCCommand&)> PostCommand;
+} g_rpcSignals;
+
+void RPCServer::OnStarted(boost::function<void ()> slot)
+{
+    g_rpcSignals.Started.connect(slot);
+}
+
+void RPCServer::OnStopped(boost::function<void ()> slot)
+{
+    g_rpcSignals.Stopped.connect(slot);
+}
+
+void RPCServer::OnPreCommand(boost::function<void (const CRPCCommand&)> slot)
+{
+    g_rpcSignals.PreCommand.connect(boost::bind(slot, _1));
+}
+
+void RPCServer::OnPostCommand(boost::function<void (const CRPCCommand&)> slot)
+{
+    g_rpcSignals.PostCommand.connect(boost::bind(slot, _1));
+}
+
+void RPCTypeCheck(const UniValue& params,
+                  const std::list<UniValue::VType>& typesExpected,
+                  bool fAllowNull)
+{
+    unsigned int i = 0;
+    BOOST_FOREACH(UniValue::VType t, typesExpected)
+    {
+        if (params.size() <= i)
+            break;
+
+        const UniValue& v = params[i];
+        if (!(fAllowNull && v.isNull())) {
+            RPCTypeCheckArgument(v, t);
+        }
+        i++;
+    }
+}
+
+void RPCTypeCheckArgument(const UniValue& value, UniValue::VType typeExpected)
+{
+    if (value.type() != typeExpected) {
+        char buffer[1024];
+        sprintf(buffer, ("Expected type %s, got %s", uvTypeName(typeExpected), uvTypeName(value.type())));
+        throw JSONRPCError(RPC_TYPE_ERROR, buffer);
+    }
+}
+
+void RPCTypeCheckObj(const UniValue& o,
+    const std::map<std::string, UniValueType>& typesExpected,
+    bool fAllowNull,
+    bool fStrict)
+{
+    for (const auto& t : typesExpected) {
+        const UniValue& v = find_value(o, t.first);
+        if (!fAllowNull && v.isNull()){
+              char buffer[1024];
+              sprintf(buffer, ("Missing %s", t.first.c_str()));
+              throw JSONRPCError(RPC_TYPE_ERROR, "");
+        }
+
+        if (!(t.second.typeAny || v.type() == t.second.type || (fAllowNull && v.isNull()))) {
+            char buffer[1024];
+            sprintf(buffer, ("Expected type %s for %s, got %s", uvTypeName(t.second.type), t.first, uvTypeName(v.type())));
+            throw JSONRPCError(RPC_TYPE_ERROR, buffer);
+        }
+    }
+
+    if (fStrict)
+    {
+        BOOST_FOREACH(const std::string& k, o.getKeys())
+        {
+            if (typesExpected.count(k) == 0)
+            {
+                char buffer[1024];
+                sprintf(buffer, ("Unexpected key %s", k.c_str()));
+                throw JSONRPCError(RPC_TYPE_ERROR, buffer);
+            }
+        }
+    }
+}
+
+std::vector<unsigned char> ParseHexV(const UniValue& v, std::string strName)
+{
+    std::string strHex;
+    if (v.isStr())
+        strHex = v.get_str();
+    if (!IsHex(strHex))
+        throw JSONRPCError(RPC_INVALID_PARAMETER, (strName+" must be hexadecimal string (not '"+strHex+"')").c_str());
+    return ParseHex(strHex);
+}
+
+std::vector<unsigned char> ParseHexO(const UniValue& o, std::string strKey)
+{
+    return ParseHexV(find_value(o, strKey), strKey);
+}
+
+bool StartRPC()
+{
+    syslog(LOG_NOTICE, "rpc: Starting RPC");
+    fRPCRunning = true;
+    g_rpcSignals.Started();
+    return true;
+}
+
+void InterruptRPC()
+{
+    syslog(LOG_NOTICE, "rpc: Interrupting RPC");
+    // Interrupt e.g. running longpolls
+    fRPCRunning = false;
+}
+
+void StopRPC()
+{
+    syslog(LOG_NOTICE, "rpc: Stopping RPC");
+    // deadlineTimers.clear();
+    g_rpcSignals.Stopped();
+}
+
+bool IsRPCRunning()
+{
+    return fRPCRunning;
+}
+
+void SetRPCWarmupStatus(const std::string &newStatus)
+{
+    // LOCK(cs_rpcWarmup);
+    rpcWarmupStatus = newStatus;
+}
+
+void SetRPCWarmupFinished()
+{
+    // LOCK(cs_rpcWarmup);
+    assert(fRPCInWarmup);
+    fRPCInWarmup = false;
+}
+
+bool RPCIsInWarmup(std::string *outStatus)
+{
+    // LOCK(cs_rpcWarmup);
+    if (outStatus)
+        *outStatus = rpcWarmupStatus;
+    return fRPCInWarmup;
+}
+
 namespace
 {
   /// Returns the input str if already valid hex string. Otherwise, interprets the str as a file
   /// name and loads the file content.
   /// @todo The file content is expected to be a hex string but not validated.
-  std::string load_hex(const std::string& str)
+  std::string load_hex(const std::string &str)
   {
       const auto error_code = ivmc::validate_hex(str);
       if (!error_code)
@@ -624,7 +1313,7 @@ namespace
       HexValidator() : CLI::Validator{"HEX"}
       {
           name_ = "HEX";
-          func_ = [](const std::string& str) -> std::string {
+          func_ = [](const std::string &str) -> std::string {
               const auto error_code = ivmc::validate_hex(str);
               if (error_code)
                   return error_code.message();
@@ -702,8 +1391,8 @@ int main(int argc, const char** argv)
   // Init Server
   if (!InitHTTPServer())
       return false;
-  // if (!StartRPC())
-  //     return false;
+  if (!StartRPC())
+      return false;
   // if (!StartHTTPRPC())
   //     return false;
   // if (GetBoolArg("-rest", DEFAULT_REST_ENABLE) && !StartREST())
