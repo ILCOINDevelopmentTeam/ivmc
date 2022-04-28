@@ -10,6 +10,7 @@
 
 #include <list>
 #include <map>
+#include <set>
 #include <unordered_map>
 
 #include <boost/function.hpp>
@@ -18,6 +19,15 @@
 #include <iostream>
 #include <sstream>        // .get_int64()
 #include <utility>        // std::pair
+
+#include "threadsafety.h"
+
+#include <boost/foreach.hpp>
+#include <boost/thread.hpp>
+#include <boost/thread/condition_variable.hpp>
+#include <boost/thread/locks.hpp>
+#include <boost/thread/mutex.hpp>
+#include <boost/thread/recursive_mutex.hpp>
 
 static const int DEFAULT_HTTP_THREADS        = 4;
 static const int DEFAULT_HTTP_WORKQUEUE      = 16;
@@ -352,6 +362,23 @@ enum jtokentype {
 extern enum jtokentype getJsonToken(std::string& tokenVal,
                                     unsigned int& consumed, const char *raw);
 
+static inline bool jsonTokenIsValue(enum jtokentype jtt)
+{
+    switch (jtt) {
+    case JTOK_KW_NULL:
+    case JTOK_KW_TRUE:
+    case JTOK_KW_FALSE:
+    case JTOK_NUMBER:
+    case JTOK_STRING:
+        return true;
+
+    default:
+        return false;
+    }
+
+    // not reached
+}
+
 extern const UniValue NullUniValue;
 
 class CRPCCommand;
@@ -664,5 +691,461 @@ static inline std::pair<std::string,UniValue> Pair(std::string key, const UniVal
 }
 
 UniValue JSONRPCError(int code, const std::string& message);
+
+// --------------------------------- StartHTTPRPC
+/**
+ * Timing-attack-resistant comparison.
+ * Takes time proportional to length
+ * of first argument.
+ */
+template <typename T>
+bool TimingResistantEqual(const T& a, const T& b)
+{
+    if (b.size() == 0) return a.size() == 0;
+    size_t accumulator = a.size() ^ b.size();
+    for (size_t i = 0; i < a.size(); i++)
+        accumulator |= a[i] ^ b[i%b.size()];
+    return accumulator == 0;
+}
+
+template<typename T>
+std::string HexStr(const T itbegin, const T itend, bool fSpaces=false)
+{
+    std::string rv;
+    static const char hexmap[16] = { '0', '1', '2', '3', '4', '5', '6', '7',
+                                     '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
+    rv.reserve((itend-itbegin)*3);
+    for(T it = itbegin; it < itend; ++it)
+    {
+        unsigned char val = (unsigned char)(*it);
+        if(fSpaces && it != itbegin)
+            rv.push_back(' ');
+        rv.push_back(hexmap[val>>4]);
+        rv.push_back(hexmap[val&15]);
+    }
+
+    return rv;
+}
+
+template<typename T>
+inline std::string HexStr(const T& vch, bool fSpaces=false)
+{
+    return HexStr(vch.begin(), vch.end(), fSpaces);
+}
+
+
+/**
+ * Return string argument or default value
+ *
+ * @param strArg Argument to get (e.g. "-foo")
+ * @param default (e.g. "1")
+ * @return command-line argument or default value
+ */
+std::string GetArg(const std::string& strArg, const std::string& strDefault);
+
+/**
+ * Return integer argument or default value
+ *
+ * @param strArg Argument to get (e.g. "-foo")
+ * @param default (e.g. 1)
+ * @return command-line argument (0 if invalid number) or default value
+ */
+int64_t GetArg(const std::string& strArg, int64_t nDefault);
+
+/** Opaque base class for timers returned by NewTimerFunc.
+ * This provides no methods at the moment, but makes sure that delete
+ * cleans up the whole state.
+ */
+class RPCTimerBase
+{
+public:
+    virtual ~RPCTimerBase() {}
+};
+
+/**
+ * RPC timer "driver".
+ */
+class RPCTimerInterface
+{
+public:
+    virtual ~RPCTimerInterface() {}
+    /** Implementation name */
+    virtual const char *Name() = 0;
+    /** Factory function for timers.
+     * RPC will call the function to create a timer that will call func in *millis* milliseconds.
+     * @note As the RPC mechanism is backend-neutral, it can use different implementations of timers.
+     * This is needed to cope with the case in which there is no HTTP server, but
+     * only GUI RPC console, and to break the dependency of pcserver on httprpc.
+     */
+    virtual RPCTimerBase* NewTimer(boost::function<void(void)>& func, int64_t millis) = 0;
+};
+
+/** Set the factory function for timers */
+void RPCSetTimerInterface(RPCTimerInterface *iface);
+/** Set the factory function for timer, but only, if unset */
+void RPCSetTimerInterfaceIfUnset(RPCTimerInterface *iface);
+/** Unset factory function for timers */
+void RPCUnsetTimerInterface(RPCTimerInterface *iface);
+
+/** A hasher class for SHA-256. */
+class CSHA256
+{
+private:
+    uint32_t s[8];
+    unsigned char buf[64];
+    uint64_t bytes;
+
+public:
+    static const size_t OUTPUT_SIZE = 32;
+
+    CSHA256();
+    CSHA256& Write(const unsigned char* data, size_t len);
+    void Finalize(unsigned char hash[OUTPUT_SIZE]);
+    CSHA256& Reset();
+};
+
+/** A hasher class for HMAC-SHA-512. */
+class CHMAC_SHA256
+{
+private:
+    CSHA256 outer;
+    CSHA256 inner;
+
+public:
+    static const size_t OUTPUT_SIZE = 32;
+
+    CHMAC_SHA256(const unsigned char* key, size_t keylen);
+    CHMAC_SHA256& Write(const unsigned char* data, size_t len)
+    {
+        inner.Write(data, len);
+        return *this;
+    }
+    void Finalize(unsigned char hash[OUTPUT_SIZE]);
+};
+
+std::vector<unsigned char> DecodeBase64(const char* p, bool* pfInvalid)
+{
+    static const int decode64_table[256] =
+    {
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, 62, -1, -1, -1, 63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1,
+        -1, -1, -1, -1, -1,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14,
+        15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, -1, -1, 26, 27, 28,
+        29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+        49, 50, 51, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1
+    };
+
+    if (pfInvalid)
+        *pfInvalid = false;
+
+    std::vector<unsigned char> vchRet;
+    vchRet.reserve(strlen(p)*3/4);
+
+    int mode = 0;
+    int left = 0;
+
+    while (1)
+    {
+         int dec = decode64_table[(unsigned char)*p];
+         if (dec == -1) break;
+         p++;
+         switch (mode)
+         {
+             case 0: // we have no bits and get 6
+                 left = dec;
+                 mode = 1;
+                 break;
+
+              case 1: // we have 6 bits and keep 4
+                  vchRet.push_back((left<<2) | (dec>>4));
+                  left = dec & 15;
+                  mode = 2;
+                  break;
+
+             case 2: // we have 4 bits and get 6, we keep 2
+                 vchRet.push_back((left<<4) | (dec>>2));
+                 left = dec & 3;
+                 mode = 3;
+                 break;
+
+             case 3: // we have 2 bits and get 6
+                 vchRet.push_back((left<<6) | dec);
+                 mode = 0;
+                 break;
+         }
+    }
+
+    if (pfInvalid)
+        switch (mode)
+        {
+            case 0: // 4n base64 characters processed: ok
+                break;
+
+            case 1: // 4n+1 base64 character processed: impossible
+                *pfInvalid = true;
+                break;
+
+            case 2: // 4n+2 base64 characters processed: require '=='
+                if (left || p[0] != '=' || p[1] != '=' || decode64_table[(unsigned char)p[2]] != -1)
+                    *pfInvalid = true;
+                break;
+
+            case 3: // 4n+3 base64 characters processed: require '='
+                if (left || p[0] != '=' || decode64_table[(unsigned char)p[1]] != -1)
+                    *pfInvalid = true;
+                break;
+        }
+
+    return vchRet;
+}
+
+std::string DecodeBase64(const std::string& str)
+{
+    bool fInvalid = false;
+    std::vector<unsigned char> vchRet = DecodeBase64(str.c_str(), &fInvalid);
+
+    if (fInvalid)
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Malformed base64 encoding");
+
+    return (vchRet.size() == 0) ? std::string() : std::string((const char*)&vchRet[0], vchRet.size());
+}
+
+UniValue JSONRPCRequestObj(const std::string& strMethod, const UniValue& params, const UniValue& id)
+{
+    UniValue request(UniValue::VOBJ);
+    request.push_back(Pair("method", strMethod));
+    request.push_back(Pair("params", params));
+    request.push_back(Pair("id", id));
+    return request;
+}
+
+UniValue JSONRPCReplyObj(const UniValue& result, const UniValue& error, const UniValue& id)
+{
+    UniValue reply(UniValue::VOBJ);
+    if (!error.isNull())
+        reply.push_back(Pair("result", NullUniValue));
+    else
+        reply.push_back(Pair("result", result));
+    reply.push_back(Pair("error", error));
+    reply.push_back(Pair("id", id));
+    return reply;
+}
+
+std::string JSONRPCReply(const UniValue& result, const UniValue& error, const UniValue& id)
+{
+    UniValue reply = JSONRPCReplyObj(result, error, id);
+    return reply.write() + "\n";
+}
+
+UniValue JSONRPCError(int code, const std::string& message)
+{
+    UniValue error(UniValue::VOBJ);
+    error.push_back(Pair("code", code));
+    error.push_back(Pair("message", message));
+    return error;
+}
+
+/** This is needed because the foreach macro can't get over the comma in pair<t1, t2> */
+#define PAIRTYPE(t1, t2)    std::pair<t1, t2>
+
+#ifndef LOCKABLE
+#define LOCKABLE
+#endif
+
+std::string itostr(int n)
+{
+    return ("%d", std::to_string(n));
+}
+
+struct CLockLocation {
+    CLockLocation(const char* pszName, const char* pszFile, int nLine, bool fTryIn)
+    {
+        mutexName = pszName;
+        sourceFile = pszFile;
+        sourceLine = nLine;
+        fTry = fTryIn;
+    }
+
+    std::string ToString() const
+    {
+        return mutexName + "  " + sourceFile + ":" + itostr(sourceLine) + (fTry ? " (TRY)" : "");
+    }
+
+    std::string MutexName() const { return mutexName; }
+
+    bool fTry;
+private:
+    std::string mutexName;
+    std::string sourceFile;
+    int sourceLine;
+};
+
+typedef std::vector<std::pair<void*, CLockLocation> > LockStack;
+typedef std::map<std::pair<void*, void*>, LockStack> LockOrders;
+typedef std::set<std::pair<void*, void*> > InvLockOrders;
+
+struct LockData {
+    // Very ugly hack: as the global constructs and destructors run single
+    // threaded, we use this boolean to know whether LockData still exists,
+    // as DeleteLock can get called by global CCriticalSection destructors
+    // after LockData disappears.
+    bool available;
+    LockData() : available(true) {}
+    ~LockData() { available = false; }
+
+    LockOrders lockorders;
+    InvLockOrders invlockorders;
+    boost::mutex dd_mutex;
+} static lockdata;
+
+boost::thread_specific_ptr<LockStack> lockstack;
+
+void DeleteLock(void* cs)
+{
+    if (!lockdata.available) {
+        // We're already shutting down.
+        return;
+    }
+    boost::unique_lock<boost::mutex> lock(lockdata.dd_mutex);
+    std::pair<void*, void*> item = std::make_pair(cs, (void*)0);
+    LockOrders::iterator it = lockdata.lockorders.lower_bound(item);
+    while (it != lockdata.lockorders.end() && it->first.first == cs) {
+        std::pair<void*, void*> invitem = std::make_pair(it->first.second, it->first.first);
+        lockdata.invlockorders.erase(invitem);
+        lockdata.lockorders.erase(it++);
+    }
+    InvLockOrders::iterator invit = lockdata.invlockorders.lower_bound(item);
+    while (invit != lockdata.invlockorders.end() && invit->first == cs) {
+        std::pair<void*, void*> invinvitem = std::make_pair(invit->second, invit->first);
+        lockdata.lockorders.erase(invinvitem);
+        lockdata.invlockorders.erase(invit++);
+    }
+}
+
+/**
+ * Template mixin that adds -Wthread-safety locking
+ * annotations to a subset of the mutex API.
+ */
+template <typename PARENT>
+class LOCKABLE AnnotatedMixin : public PARENT
+{
+public:
+    void lock() EXCLUSIVE_LOCK_FUNCTION()
+    {
+        PARENT::lock();
+    }
+
+    void unlock() UNLOCK_FUNCTION()
+    {
+        PARENT::unlock();
+    }
+
+    bool try_lock() EXCLUSIVE_TRYLOCK_FUNCTION(true)
+    {
+        return PARENT::try_lock();
+    }
+};
+
+#ifdef DEBUG_LOCKORDER
+void EnterCritical(const char* pszName, const char* pszFile, int nLine, void* cs, bool fTry = false);
+void LeaveCritical();
+#else
+void static inline EnterCritical(const char* pszName, const char* pszFile, int nLine, void* cs, bool fTry = false) {}
+void static inline LeaveCritical() {}
+#endif
+
+/**
+ * Wrapped boost mutex: supports recursive locking, but no waiting
+ * TODO: We should move away from using the recursive lock by default.
+ */
+class CCriticalSection : public AnnotatedMixin<boost::recursive_mutex>
+{
+public:
+    ~CCriticalSection() {
+        DeleteLock((void*)this);
+    }
+};
+
+typedef CCriticalSection CDynamicCriticalSection;
+/** Wrapped boost mutex: supports waiting but not recursive locking */
+typedef AnnotatedMixin<boost::mutex> CWaitableCriticalSection;
+
+/** Just a typedef for boost::condition_variable, can be wrapped later if desired */
+typedef boost::condition_variable CConditionVariable;
+
+/** Wrapper around boost::unique_lock<Mutex> */
+template <typename Mutex>
+class SCOPED_LOCKABLE CMutexLock
+{
+private:
+    boost::unique_lock<Mutex> lock;
+
+    void Enter(const char* pszName, const char* pszFile, int nLine)
+    {
+        EnterCritical(pszName, pszFile, nLine, (void*)(lock.mutex()));
+#ifdef DEBUG_LOCKCONTENTION
+        if (!lock.try_lock()) {
+            PrintLockContention(pszName, pszFile, nLine);
+#endif
+            lock.lock();
+#ifdef DEBUG_LOCKCONTENTION
+        }
+#endif
+    }
+
+    bool TryEnter(const char* pszName, const char* pszFile, int nLine)
+    {
+        EnterCritical(pszName, pszFile, nLine, (void*)(lock.mutex()), true);
+        lock.try_lock();
+        if (!lock.owns_lock())
+            LeaveCritical();
+        return lock.owns_lock();
+    }
+
+public:
+    CMutexLock(Mutex& mutexIn, const char* pszName, const char* pszFile, int nLine, bool fTry = false) EXCLUSIVE_LOCK_FUNCTION(mutexIn) : lock(mutexIn, boost::defer_lock)
+    {
+        if (fTry)
+            TryEnter(pszName, pszFile, nLine);
+        else
+            Enter(pszName, pszFile, nLine);
+    }
+
+    CMutexLock(Mutex* pmutexIn, const char* pszName, const char* pszFile, int nLine, bool fTry = false) EXCLUSIVE_LOCK_FUNCTION(pmutexIn)
+    {
+        if (!pmutexIn) return;
+
+        lock = boost::unique_lock<Mutex>(*pmutexIn, boost::defer_lock);
+        if (fTry)
+            TryEnter(pszName, pszFile, nLine);
+        else
+            Enter(pszName, pszFile, nLine);
+    }
+
+    ~CMutexLock() UNLOCK_FUNCTION()
+    {
+        if (lock.owns_lock())
+            LeaveCritical();
+    }
+
+    operator bool()
+    {
+        return lock.owns_lock();
+    }
+};
+
+typedef CMutexLock<CCriticalSection> CCriticalBlock;
+
+#define PASTE(x, y) x ## y
+#define PASTE2(x, y) PASTE(x, y)
+
+#define LOCK(cs) CCriticalBlock PASTE2(criticalblock, __COUNTER__)(cs, #cs, __FILE__, __LINE__)
 
 #endif // ILCOIN_HTTPSERVER_H

@@ -2,6 +2,8 @@
 // Copyright 2019-2022 The IVMC Authors.
 
 #include "deamon.h"
+#include "univalue_escapes.h"
+#include "common.h"
 
 #include <CLI/CLI.hpp>
 #include <ivmc/hex.hpp>
@@ -19,6 +21,7 @@
 #include <syslog.h>
 #include <unistd.h>
 #include <vector>
+#include <utility>        // std::pair
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,6 +36,7 @@
 #include <memory> // for unique_ptr
 #include <functional>
 #include <cassert>
+#include <set>
 
 #include <event2/event.h>
 #include <event2/http.h>
@@ -48,6 +52,9 @@
 #include <boost/signals2/signal.hpp>
 #include <boost/thread.hpp>
 #include <boost/algorithm/string/case_conv.hpp> // for to_upper()
+#include <boost/algorithm/string.hpp> // boost::trim
+#include <boost/date_time/posix_time/posix_time.hpp>
+#include <boost/chrono/chrono.hpp>
 
 #ifdef EVENT__HAVE_NETINET_IN_H
 #include <netinet/in.h>
@@ -196,6 +203,8 @@ static WorkQueue<HTTPClosure>* workQueue = 0;
 std::vector<HTTPPathHandler> pathHandlers;
 //! Bound listening sockets
 std::vector<evhttp_bound_socket *> boundSockets;
+
+CRPCTable tableRPC;
 
 /** Check if a network address is allowed to access the HTTP server */
 static bool ClientAllowed()
@@ -616,7 +625,7 @@ void UnregisterHTTPHandler(const std::string &prefix, bool exactMatch)
 static bool fRPCRunning = false;
 static bool fRPCInWarmup = true;
 static std::string rpcWarmupStatus("RPC server started");
-// static CCriticalSection cs_rpcWarmup;
+static CCriticalSection cs_rpcWarmup;
 /* Map of name to timer. */
 // static std::map<std::string, std::unique_ptr<RPCTimerBase> > deadlineTimers;
 
@@ -700,6 +709,62 @@ static inline bool json_isspace(int ch)
 static bool json_isdigit(int ch)
 {
     return ((ch >= '0') && (ch <= '9'));
+}
+
+static bool ParsePrechecks(const std::string& str)
+{
+    if (str.empty()) // No empty string allowed
+        return false;
+    if (str.size() >= 1 && (json_isspace(str[0]) || json_isspace(str[str.size()-1]))) // No padding allowed
+        return false;
+    if (str.size() != strlen(str.c_str())) // No embedded NUL characters allowed
+        return false;
+    return true;
+}
+
+bool ParseInt32(const std::string& str, int32_t *out)
+{
+    if (!ParsePrechecks(str))
+        return false;
+    char *endp = NULL;
+    errno = 0; // strtol will not set errno if valid
+    long int n = strtol(str.c_str(), &endp, 10);
+    if(out) *out = (int32_t)n;
+    // Note that strtol returns a *long int*, so even if strtol doesn't report a over/underflow
+    // we still have to check that the returned value is within the range of an *int32_t*. On 64-bit
+    // platforms the size of these types may be different.
+    return endp && *endp == 0 && !errno &&
+        n >= std::numeric_limits<int32_t>::min() &&
+        n <= std::numeric_limits<int32_t>::max();
+}
+
+bool ParseInt64(const std::string& str, int64_t *out)
+{
+    if (!ParsePrechecks(str))
+        return false;
+    char *endp = NULL;
+    errno = 0; // strtoll will not set errno if valid
+    long long int n = strtoll(str.c_str(), &endp, 10);
+    if(out) *out = (int64_t)n;
+    // Note that strtoll returns a *long long int*, so even if strtol doesn't report a over/underflow
+    // we still have to check that the returned value is within the range of an *int64_t*.
+    return endp && *endp == 0 && !errno &&
+        n >= std::numeric_limits<int64_t>::min() &&
+        n <= std::numeric_limits<int64_t>::max();
+}
+
+bool ParseDouble(const std::string& str, double *out)
+{
+    if (!ParsePrechecks(str))
+        return false;
+    if (str.size() >= 2 && str[0] == '0' && str[1] == 'x') // No hexadecimal floats allowed
+        return false;
+    std::istringstream text(str);
+    text.imbue(std::locale::classic());
+    double result;
+    text >> result;
+    if(out) *out = result;
+    return text.eof() && !text.fail();
 }
 
 // convert hexadecimal string to unsigned integer
@@ -1080,6 +1145,110 @@ const UniValue& UniValue::operator[](unsigned int index) const
     return values.at(index);
 }
 
+static std::string json_escape(const std::string& inS)
+{
+    std::string outS;
+    outS.reserve(inS.size() * 2);
+
+    for (unsigned int i = 0; i < inS.size(); i++) {
+        unsigned char ch = inS[i];
+        const char *escStr = escapes[ch];
+
+        if (escStr)
+            outS += escStr;
+        else
+            outS += ch;
+    }
+
+    return outS;
+}
+
+std::string UniValue::write(unsigned int prettyIndent, unsigned int indentLevel) const
+{
+    std::string s;
+    s.reserve(1024);
+
+    unsigned int modIndent = indentLevel;
+    if (modIndent == 0)
+        modIndent = 1;
+
+    switch (typ) {
+    case VNULL:
+        s += "null";
+        break;
+    case VOBJ:
+        writeObject(prettyIndent, modIndent, s);
+        break;
+    case VARR:
+        writeArray(prettyIndent, modIndent, s);
+        break;
+    case VSTR:
+        s += "\"" + json_escape(val) + "\"";
+        break;
+    case VNUM:
+        s += val;
+        break;
+    case VBOOL:
+        s += (val == "1" ? "true" : "false");
+        break;
+    }
+
+    return s;
+}
+
+static void indentStr(unsigned int prettyIndent, unsigned int indentLevel, std::string& s)
+{
+    s.append(prettyIndent * indentLevel, ' ');
+}
+
+void UniValue::writeArray(unsigned int prettyIndent, unsigned int indentLevel, std::string& s) const
+{
+    s += "[";
+    if (prettyIndent)
+        s += "\n";
+
+    for (unsigned int i = 0; i < values.size(); i++) {
+        if (prettyIndent)
+            indentStr(prettyIndent, indentLevel, s);
+        s += values[i].write(prettyIndent, indentLevel + 1);
+        if (i != (values.size() - 1)) {
+            s += ",";
+            if (prettyIndent)
+                s += " ";
+        }
+        if (prettyIndent)
+            s += "\n";
+    }
+
+    if (prettyIndent)
+        indentStr(prettyIndent, indentLevel - 1, s);
+    s += "]";
+}
+
+void UniValue::writeObject(unsigned int prettyIndent, unsigned int indentLevel, std::string& s) const
+{
+    s += "{";
+    if (prettyIndent)
+        s += "\n";
+
+    for (unsigned int i = 0; i < keys.size(); i++) {
+        if (prettyIndent)
+            indentStr(prettyIndent, indentLevel, s);
+        s += "\"" + json_escape(keys[i]) + "\":";
+        if (prettyIndent)
+            s += " ";
+        s += values.at(i).write(prettyIndent, indentLevel + 1);
+        if (i != (values.size() - 1))
+            s += ",";
+        if (prettyIndent)
+            s += "\n";
+    }
+
+    if (prettyIndent)
+        indentStr(prettyIndent, indentLevel - 1, s);
+    s += "}";
+}
+
 const char *uvTypeName(UniValue::VType t)
 {
     switch (t) {
@@ -1132,12 +1301,233 @@ const std::string& UniValue::get_str() const
     return getValStr();
 }
 
-UniValue JSONRPCError(int code, const std::string &message)
+int UniValue::get_int() const
 {
-    UniValue error(UniValue::VOBJ);
-    error.push_back(Pair("code", code));
-    error.push_back(Pair("message", message));
-    return error;
+    if (typ != VNUM)
+        throw std::runtime_error("JSON value is not an integer as expected");
+    int32_t retval;
+    if (!ParseInt32(getValStr(), &retval))
+        throw std::runtime_error("JSON integer out of range");
+    return retval;
+}
+
+const UniValue& UniValue::get_obj() const
+{
+    if (typ != VOBJ)
+        throw std::runtime_error("JSON value is not an object as expected");
+    return *this;
+}
+
+enum expect_bits {
+    EXP_OBJ_NAME = (1U << 0),
+    EXP_COLON = (1U << 1),
+    EXP_ARR_VALUE = (1U << 2),
+    EXP_VALUE = (1U << 3),
+    EXP_NOT_VALUE = (1U << 4),
+};
+
+#define expect(bit) (expectMask & (EXP_##bit))
+#define setExpect(bit) (expectMask |= EXP_##bit)
+#define clearExpect(bit) (expectMask &= ~EXP_##bit)
+
+bool UniValue::read(const char *raw)
+{
+    clear();
+
+    uint32_t expectMask = 0;
+    std::vector<UniValue*> stack;
+
+    std::string tokenVal;
+    unsigned int consumed;
+    enum jtokentype tok = JTOK_NONE;
+    enum jtokentype last_tok = JTOK_NONE;
+    do {
+        last_tok = tok;
+
+        tok = getJsonToken(tokenVal, consumed, raw);
+        if (tok == JTOK_NONE || tok == JTOK_ERR)
+            return false;
+        raw += consumed;
+
+        bool isValueOpen = jsonTokenIsValue(tok) ||
+            tok == JTOK_OBJ_OPEN || tok == JTOK_ARR_OPEN;
+
+        if (expect(VALUE)) {
+            if (!isValueOpen)
+                return false;
+            clearExpect(VALUE);
+
+        } else if (expect(ARR_VALUE)) {
+            bool isArrValue = isValueOpen || (tok == JTOK_ARR_CLOSE);
+            if (!isArrValue)
+                return false;
+
+            clearExpect(ARR_VALUE);
+
+        } else if (expect(OBJ_NAME)) {
+            bool isObjName = (tok == JTOK_OBJ_CLOSE || tok == JTOK_STRING);
+            if (!isObjName)
+                return false;
+
+        } else if (expect(COLON)) {
+            if (tok != JTOK_COLON)
+                return false;
+            clearExpect(COLON);
+
+        } else if (!expect(COLON) && (tok == JTOK_COLON)) {
+            return false;
+        }
+
+        if (expect(NOT_VALUE)) {
+            if (isValueOpen)
+                return false;
+            clearExpect(NOT_VALUE);
+        }
+
+        switch (tok) {
+
+        case JTOK_OBJ_OPEN:
+        case JTOK_ARR_OPEN: {
+            VType utyp = (tok == JTOK_OBJ_OPEN ? VOBJ : VARR);
+            if (!stack.size()) {
+                if (utyp == VOBJ)
+                    setObject();
+                else
+                    setArray();
+                stack.push_back(this);
+            } else {
+                UniValue tmpVal(utyp);
+                UniValue *top = stack.back();
+                top->values.push_back(tmpVal);
+
+                UniValue *newTop = &(top->values.back());
+                stack.push_back(newTop);
+            }
+
+            if (utyp == VOBJ)
+                setExpect(OBJ_NAME);
+            else
+                setExpect(ARR_VALUE);
+            break;
+            }
+
+        case JTOK_OBJ_CLOSE:
+        case JTOK_ARR_CLOSE: {
+            if (!stack.size() || (last_tok == JTOK_COMMA))
+                return false;
+
+            VType utyp = (tok == JTOK_OBJ_CLOSE ? VOBJ : VARR);
+            UniValue *top = stack.back();
+            if (utyp != top->getType())
+                return false;
+
+            stack.pop_back();
+            clearExpect(OBJ_NAME);
+            setExpect(NOT_VALUE);
+            break;
+            }
+
+        case JTOK_COLON: {
+            if (!stack.size())
+                return false;
+
+            UniValue *top = stack.back();
+            if (top->getType() != VOBJ)
+                return false;
+
+            setExpect(VALUE);
+            break;
+            }
+
+        case JTOK_COMMA: {
+            if (!stack.size() ||
+                (last_tok == JTOK_COMMA) || (last_tok == JTOK_ARR_OPEN))
+                return false;
+
+            UniValue *top = stack.back();
+            if (top->getType() == VOBJ)
+                setExpect(OBJ_NAME);
+            else
+                setExpect(ARR_VALUE);
+            break;
+            }
+
+        case JTOK_KW_NULL:
+        case JTOK_KW_TRUE:
+        case JTOK_KW_FALSE: {
+            if (!stack.size())
+                return false;
+
+            UniValue tmpVal;
+            switch (tok) {
+            case JTOK_KW_NULL:
+                // do nothing more
+                break;
+            case JTOK_KW_TRUE:
+                tmpVal.setBool(true);
+                break;
+            case JTOK_KW_FALSE:
+                tmpVal.setBool(false);
+                break;
+            default: /* impossible */ break;
+            }
+
+            UniValue *top = stack.back();
+            top->values.push_back(tmpVal);
+
+            setExpect(NOT_VALUE);
+            break;
+            }
+
+        case JTOK_NUMBER: {
+            if (!stack.size())
+                return false;
+
+            UniValue tmpVal(VNUM, tokenVal);
+            UniValue *top = stack.back();
+            top->values.push_back(tmpVal);
+
+            setExpect(NOT_VALUE);
+            break;
+            }
+
+        case JTOK_STRING: {
+            if (!stack.size())
+                return false;
+
+            UniValue *top = stack.back();
+
+            if (expect(OBJ_NAME)) {
+                top->keys.push_back(tokenVal);
+                clearExpect(OBJ_NAME);
+                setExpect(COLON);
+            } else {
+                UniValue tmpVal(VSTR, tokenVal);
+                top->values.push_back(tmpVal);
+            }
+
+            setExpect(NOT_VALUE);
+            break;
+            }
+
+        default:
+            return false;
+        }
+    } while (!stack.empty ());
+
+    /* Check that nothing follows the initial construct (parsed above).  */
+    tok = getJsonToken(tokenVal, consumed, raw);
+    if (tok != JTOK_NONE)
+        return false;
+
+    return true;
+}
+
+const UniValue& UniValue::get_array() const
+{
+    if (typ != VARR)
+        throw std::runtime_error("JSON value is not an array as expected");
+    return *this;
 }
 
 static struct CRPCSignals
@@ -1273,23 +1663,767 @@ bool IsRPCRunning()
 
 void SetRPCWarmupStatus(const std::string &newStatus)
 {
-    // LOCK(cs_rpcWarmup);
+    LOCK(cs_rpcWarmup);
     rpcWarmupStatus = newStatus;
 }
 
 void SetRPCWarmupFinished()
 {
-    // LOCK(cs_rpcWarmup);
+    LOCK(cs_rpcWarmup);
     assert(fRPCInWarmup);
     fRPCInWarmup = false;
 }
 
 bool RPCIsInWarmup(std::string *outStatus)
 {
-    // LOCK(cs_rpcWarmup);
+    LOCK(cs_rpcWarmup);
     if (outStatus)
         *outStatus = rpcWarmupStatus;
     return fRPCInWarmup;
+}
+
+static UniValue JSONRPCExecOne(const UniValue& req)
+{
+    UniValue rpc_result(UniValue::VOBJ);
+
+    JSONRPCRequest jreq;
+    try {
+        jreq.parse(req);
+
+        UniValue result = tableRPC.execute(jreq);
+        rpc_result = JSONRPCReplyObj(result, NullUniValue, jreq.id);
+    }
+    catch (const UniValue& objError)
+    {
+        rpc_result = JSONRPCReplyObj(NullUniValue, objError, jreq.id);
+    }
+    catch (const std::exception& e)
+    {
+        rpc_result = JSONRPCReplyObj(NullUniValue, JSONRPCError(RPC_PARSE_ERROR, e.what()), jreq.id);
+    }
+
+    return rpc_result;
+}
+
+std::string JSONRPCExecBatch(const UniValue& vReq)
+{
+    UniValue ret(UniValue::VARR);
+    for (unsigned int reqIdx = 0; reqIdx < vReq.size(); reqIdx++)
+        ret.push_back(JSONRPCExecOne(vReq[reqIdx]));
+
+    return ret.write() + "\n";
+}
+
+/** Used by SanitizeString() */
+enum SafeChars
+{
+    SAFE_CHARS_DEFAULT, //!< The full set of allowed chars
+    SAFE_CHARS_UA_COMMENT, //!< BIP-0014 subset
+    SAFE_CHARS_FILENAME, //!< Chars allowed in filenames
+};
+
+static const std::string CHARS_ALPHA_NUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+static const std::string SAFE_CHARS[] =
+{
+    CHARS_ALPHA_NUM + " .,;-_/:?@()", // SAFE_CHARS_DEFAULT
+    CHARS_ALPHA_NUM + " .,;-_?@", // SAFE_CHARS_UA_COMMENT
+    CHARS_ALPHA_NUM + ".-_", // SAFE_CHARS_FILENAME
+};
+
+std::string SanitizeString(const std::string& str, int rule = SAFE_CHARS_DEFAULT)
+{
+    std::string strResult;
+    for (std::string::size_type i = 0; i < str.size(); i++)
+    {
+        if (SAFE_CHARS[rule].find(str[i]) != std::string::npos)
+            strResult.push_back(str[i]);
+    }
+    return strResult;
+}
+
+void JSONRPCRequest::parse(const UniValue& valRequest)
+{
+    // Parse request
+    if (!valRequest.isObject())
+        throw JSONRPCError(RPC_INVALID_REQUEST, "Invalid Request object");
+    const UniValue& request = valRequest.get_obj();
+
+    // Parse id now so errors from here on will have the id
+    id = find_value(request, "id");
+
+    // Parse method
+    UniValue valMethod = find_value(request, "method");
+    if (valMethod.isNull())
+        throw JSONRPCError(RPC_INVALID_REQUEST, "Missing method");
+    if (!valMethod.isStr())
+        throw JSONRPCError(RPC_INVALID_REQUEST, "Method must be a string");
+    strMethod = valMethod.get_str();
+    if (strMethod != "getblocktemplate")
+        syslog(LOG_NOTICE, ("rpc: ThreadRPCServer method=%s\n", SanitizeString(strMethod)).c_str());
+
+    // Parse params
+    UniValue valParams = find_value(request, "params");
+    if (valParams.isArray() || valParams.isObject())
+        params = valParams;
+    else if (valParams.isNull())
+        params = UniValue(UniValue::VARR);
+    else
+        throw JSONRPCError(RPC_INVALID_REQUEST, "Params must be an array or object");
+}
+
+// --------------------------------- StartHTTPRPC
+
+/// Internal SHA-256 implementation.
+namespace sha256
+{
+uint32_t inline Ch(uint32_t x, uint32_t y, uint32_t z) { return z ^ (x & (y ^ z)); }
+uint32_t inline Maj(uint32_t x, uint32_t y, uint32_t z) { return (x & y) | (z & (x | y)); }
+uint32_t inline Sigma0(uint32_t x) { return (x >> 2 | x << 30) ^ (x >> 13 | x << 19) ^ (x >> 22 | x << 10); }
+uint32_t inline Sigma1(uint32_t x) { return (x >> 6 | x << 26) ^ (x >> 11 | x << 21) ^ (x >> 25 | x << 7); }
+uint32_t inline sigma0(uint32_t x) { return (x >> 7 | x << 25) ^ (x >> 18 | x << 14) ^ (x >> 3); }
+uint32_t inline sigma1(uint32_t x) { return (x >> 17 | x << 15) ^ (x >> 19 | x << 13) ^ (x >> 10); }
+
+/** One round of SHA-256. */
+void inline Round(uint32_t a, uint32_t b, uint32_t c, uint32_t& d, uint32_t e, uint32_t f, uint32_t g, uint32_t& h, uint32_t k, uint32_t w)
+{
+    uint32_t t1 = h + Sigma1(e) + Ch(e, f, g) + k + w;
+    uint32_t t2 = Sigma0(a) + Maj(a, b, c);
+    d += t1;
+    h = t1 + t2;
+}
+
+/** Initialize SHA-256 state. */
+void inline Initialize(uint32_t* s)
+{
+    s[0] = 0x6a09e667ul;
+    s[1] = 0xbb67ae85ul;
+    s[2] = 0x3c6ef372ul;
+    s[3] = 0xa54ff53aul;
+    s[4] = 0x510e527ful;
+    s[5] = 0x9b05688cul;
+    s[6] = 0x1f83d9abul;
+    s[7] = 0x5be0cd19ul;
+}
+
+/** Perform one SHA-256 transformation, processing a 64-byte chunk. */
+void Transform(uint32_t* s, const unsigned char* chunk)
+{
+    uint32_t a = s[0], b = s[1], c = s[2], d = s[3], e = s[4], f = s[5], g = s[6], h = s[7];
+    uint32_t w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15;
+
+    Round(a, b, c, d, e, f, g, h, 0x428a2f98, w0 = ReadBE32(chunk + 0));
+    Round(h, a, b, c, d, e, f, g, 0x71374491, w1 = ReadBE32(chunk + 4));
+    Round(g, h, a, b, c, d, e, f, 0xb5c0fbcf, w2 = ReadBE32(chunk + 8));
+    Round(f, g, h, a, b, c, d, e, 0xe9b5dba5, w3 = ReadBE32(chunk + 12));
+    Round(e, f, g, h, a, b, c, d, 0x3956c25b, w4 = ReadBE32(chunk + 16));
+    Round(d, e, f, g, h, a, b, c, 0x59f111f1, w5 = ReadBE32(chunk + 20));
+    Round(c, d, e, f, g, h, a, b, 0x923f82a4, w6 = ReadBE32(chunk + 24));
+    Round(b, c, d, e, f, g, h, a, 0xab1c5ed5, w7 = ReadBE32(chunk + 28));
+    Round(a, b, c, d, e, f, g, h, 0xd807aa98, w8 = ReadBE32(chunk + 32));
+    Round(h, a, b, c, d, e, f, g, 0x12835b01, w9 = ReadBE32(chunk + 36));
+    Round(g, h, a, b, c, d, e, f, 0x243185be, w10 = ReadBE32(chunk + 40));
+    Round(f, g, h, a, b, c, d, e, 0x550c7dc3, w11 = ReadBE32(chunk + 44));
+    Round(e, f, g, h, a, b, c, d, 0x72be5d74, w12 = ReadBE32(chunk + 48));
+    Round(d, e, f, g, h, a, b, c, 0x80deb1fe, w13 = ReadBE32(chunk + 52));
+    Round(c, d, e, f, g, h, a, b, 0x9bdc06a7, w14 = ReadBE32(chunk + 56));
+    Round(b, c, d, e, f, g, h, a, 0xc19bf174, w15 = ReadBE32(chunk + 60));
+
+    Round(a, b, c, d, e, f, g, h, 0xe49b69c1, w0 += sigma1(w14) + w9 + sigma0(w1));
+    Round(h, a, b, c, d, e, f, g, 0xefbe4786, w1 += sigma1(w15) + w10 + sigma0(w2));
+    Round(g, h, a, b, c, d, e, f, 0x0fc19dc6, w2 += sigma1(w0) + w11 + sigma0(w3));
+    Round(f, g, h, a, b, c, d, e, 0x240ca1cc, w3 += sigma1(w1) + w12 + sigma0(w4));
+    Round(e, f, g, h, a, b, c, d, 0x2de92c6f, w4 += sigma1(w2) + w13 + sigma0(w5));
+    Round(d, e, f, g, h, a, b, c, 0x4a7484aa, w5 += sigma1(w3) + w14 + sigma0(w6));
+    Round(c, d, e, f, g, h, a, b, 0x5cb0a9dc, w6 += sigma1(w4) + w15 + sigma0(w7));
+    Round(b, c, d, e, f, g, h, a, 0x76f988da, w7 += sigma1(w5) + w0 + sigma0(w8));
+    Round(a, b, c, d, e, f, g, h, 0x983e5152, w8 += sigma1(w6) + w1 + sigma0(w9));
+    Round(h, a, b, c, d, e, f, g, 0xa831c66d, w9 += sigma1(w7) + w2 + sigma0(w10));
+    Round(g, h, a, b, c, d, e, f, 0xb00327c8, w10 += sigma1(w8) + w3 + sigma0(w11));
+    Round(f, g, h, a, b, c, d, e, 0xbf597fc7, w11 += sigma1(w9) + w4 + sigma0(w12));
+    Round(e, f, g, h, a, b, c, d, 0xc6e00bf3, w12 += sigma1(w10) + w5 + sigma0(w13));
+    Round(d, e, f, g, h, a, b, c, 0xd5a79147, w13 += sigma1(w11) + w6 + sigma0(w14));
+    Round(c, d, e, f, g, h, a, b, 0x06ca6351, w14 += sigma1(w12) + w7 + sigma0(w15));
+    Round(b, c, d, e, f, g, h, a, 0x14292967, w15 += sigma1(w13) + w8 + sigma0(w0));
+
+    Round(a, b, c, d, e, f, g, h, 0x27b70a85, w0 += sigma1(w14) + w9 + sigma0(w1));
+    Round(h, a, b, c, d, e, f, g, 0x2e1b2138, w1 += sigma1(w15) + w10 + sigma0(w2));
+    Round(g, h, a, b, c, d, e, f, 0x4d2c6dfc, w2 += sigma1(w0) + w11 + sigma0(w3));
+    Round(f, g, h, a, b, c, d, e, 0x53380d13, w3 += sigma1(w1) + w12 + sigma0(w4));
+    Round(e, f, g, h, a, b, c, d, 0x650a7354, w4 += sigma1(w2) + w13 + sigma0(w5));
+    Round(d, e, f, g, h, a, b, c, 0x766a0abb, w5 += sigma1(w3) + w14 + sigma0(w6));
+    Round(c, d, e, f, g, h, a, b, 0x81c2c92e, w6 += sigma1(w4) + w15 + sigma0(w7));
+    Round(b, c, d, e, f, g, h, a, 0x92722c85, w7 += sigma1(w5) + w0 + sigma0(w8));
+    Round(a, b, c, d, e, f, g, h, 0xa2bfe8a1, w8 += sigma1(w6) + w1 + sigma0(w9));
+    Round(h, a, b, c, d, e, f, g, 0xa81a664b, w9 += sigma1(w7) + w2 + sigma0(w10));
+    Round(g, h, a, b, c, d, e, f, 0xc24b8b70, w10 += sigma1(w8) + w3 + sigma0(w11));
+    Round(f, g, h, a, b, c, d, e, 0xc76c51a3, w11 += sigma1(w9) + w4 + sigma0(w12));
+    Round(e, f, g, h, a, b, c, d, 0xd192e819, w12 += sigma1(w10) + w5 + sigma0(w13));
+    Round(d, e, f, g, h, a, b, c, 0xd6990624, w13 += sigma1(w11) + w6 + sigma0(w14));
+    Round(c, d, e, f, g, h, a, b, 0xf40e3585, w14 += sigma1(w12) + w7 + sigma0(w15));
+    Round(b, c, d, e, f, g, h, a, 0x106aa070, w15 += sigma1(w13) + w8 + sigma0(w0));
+
+    Round(a, b, c, d, e, f, g, h, 0x19a4c116, w0 += sigma1(w14) + w9 + sigma0(w1));
+    Round(h, a, b, c, d, e, f, g, 0x1e376c08, w1 += sigma1(w15) + w10 + sigma0(w2));
+    Round(g, h, a, b, c, d, e, f, 0x2748774c, w2 += sigma1(w0) + w11 + sigma0(w3));
+    Round(f, g, h, a, b, c, d, e, 0x34b0bcb5, w3 += sigma1(w1) + w12 + sigma0(w4));
+    Round(e, f, g, h, a, b, c, d, 0x391c0cb3, w4 += sigma1(w2) + w13 + sigma0(w5));
+    Round(d, e, f, g, h, a, b, c, 0x4ed8aa4a, w5 += sigma1(w3) + w14 + sigma0(w6));
+    Round(c, d, e, f, g, h, a, b, 0x5b9cca4f, w6 += sigma1(w4) + w15 + sigma0(w7));
+    Round(b, c, d, e, f, g, h, a, 0x682e6ff3, w7 += sigma1(w5) + w0 + sigma0(w8));
+    Round(a, b, c, d, e, f, g, h, 0x748f82ee, w8 += sigma1(w6) + w1 + sigma0(w9));
+    Round(h, a, b, c, d, e, f, g, 0x78a5636f, w9 += sigma1(w7) + w2 + sigma0(w10));
+    Round(g, h, a, b, c, d, e, f, 0x84c87814, w10 += sigma1(w8) + w3 + sigma0(w11));
+    Round(f, g, h, a, b, c, d, e, 0x8cc70208, w11 += sigma1(w9) + w4 + sigma0(w12));
+    Round(e, f, g, h, a, b, c, d, 0x90befffa, w12 += sigma1(w10) + w5 + sigma0(w13));
+    Round(d, e, f, g, h, a, b, c, 0xa4506ceb, w13 += sigma1(w11) + w6 + sigma0(w14));
+    Round(c, d, e, f, g, h, a, b, 0xbef9a3f7, w14 + sigma1(w12) + w7 + sigma0(w15));
+    Round(b, c, d, e, f, g, h, a, 0xc67178f2, w15 + sigma1(w13) + w8 + sigma0(w0));
+
+    s[0] += a;
+    s[1] += b;
+    s[2] += c;
+    s[3] += d;
+    s[4] += e;
+    s[5] += f;
+    s[6] += g;
+    s[7] += h;
+}
+
+} // namespace sha256
+
+CSHA256::CSHA256() : bytes(0)
+{
+    sha256::Initialize(s);
+}
+
+CSHA256& CSHA256::Write(const unsigned char* data, size_t len)
+{
+    const unsigned char* end = data + len;
+    size_t bufsize = bytes % 64;
+    if (bufsize && bufsize + len >= 64) {
+        // Fill the buffer, and process it.
+        memcpy(buf + bufsize, data, 64 - bufsize);
+        bytes += 64 - bufsize;
+        data += 64 - bufsize;
+        sha256::Transform(s, buf);
+        bufsize = 0;
+    }
+    while (end >= data + 64) {
+        // Process full chunks directly from the source.
+        sha256::Transform(s, data);
+        bytes += 64;
+        data += 64;
+    }
+    if (end > data) {
+        // Fill the buffer with what remains.
+        memcpy(buf + bufsize, data, end - data);
+        bytes += end - data;
+    }
+    return *this;
+}
+
+void CSHA256::Finalize(unsigned char hash[OUTPUT_SIZE])
+{
+    static const unsigned char pad[64] = {0x80};
+    unsigned char sizedesc[8];
+    WriteBE64(sizedesc, bytes << 3);
+    Write(pad, 1 + ((119 - (bytes % 64)) % 64));
+    Write(sizedesc, 8);
+    WriteBE32(hash, s[0]);
+    WriteBE32(hash + 4, s[1]);
+    WriteBE32(hash + 8, s[2]);
+    WriteBE32(hash + 12, s[3]);
+    WriteBE32(hash + 16, s[4]);
+    WriteBE32(hash + 20, s[5]);
+    WriteBE32(hash + 24, s[6]);
+    WriteBE32(hash + 28, s[7]);
+}
+
+CSHA256& CSHA256::Reset()
+{
+    bytes = 0;
+    sha256::Initialize(s);
+    return *this;
+}
+
+CHMAC_SHA256::CHMAC_SHA256(const unsigned char* key, size_t keylen)
+{
+    unsigned char rkey[64];
+    if (keylen <= 64) {
+        memcpy(rkey, key, keylen);
+        memset(rkey + keylen, 0, 64 - keylen);
+    } else {
+        CSHA256().Write(key, keylen).Finalize(rkey);
+        memset(rkey + 32, 0, 32);
+    }
+
+    for (int n = 0; n < 64; n++)
+        rkey[n] ^= 0x5c;
+    outer.Write(rkey, 64);
+
+    for (int n = 0; n < 64; n++)
+        rkey[n] ^= 0x5c ^ 0x36;
+    inner.Write(rkey, 64);
+}
+
+void CHMAC_SHA256::Finalize(unsigned char hash[OUTPUT_SIZE])
+{
+    unsigned char temp[32];
+    inner.Finalize(temp);
+    outer.Write(temp, 32).Finalize(hash);
+}
+
+/**
+ * Process named arguments into a vector of positional arguments, based on the
+ * passed-in specification for the RPC call's arguments.
+ */
+static inline JSONRPCRequest transformNamedArguments(const JSONRPCRequest& in, const std::vector<std::string>& argNames)
+{
+    JSONRPCRequest out = in;
+    out.params = UniValue(UniValue::VARR);
+    // Build a map of parameters, and remove ones that have been processed, so that we can throw a focused error if
+    // there is an unknown one.
+    const std::vector<std::string>& keys = in.params.getKeys();
+    const std::vector<UniValue>& values = in.params.getValues();
+    std::unordered_map<std::string, const UniValue*> argsIn;
+    for (size_t i=0; i<keys.size(); ++i) {
+        argsIn[keys[i]] = &values[i];
+    }
+    // Process expected parameters.
+    int hole = 0;
+    for (const std::string &argName: argNames) {
+        auto fr = argsIn.find(argName);
+        if (fr != argsIn.end()) {
+            for (int i = 0; i < hole; ++i) {
+                // Fill hole between specified parameters with JSON nulls,
+                // but not at the end (for backwards compatibility with calls
+                // that act based on number of specified parameters).
+                out.params.push_back(UniValue());
+            }
+            hole = 0;
+            out.params.push_back(*fr->second);
+            argsIn.erase(fr);
+        } else {
+            hole += 1;
+        }
+    }
+    // If there are still arguments in the argsIn map, this is an error.
+    if (!argsIn.empty()) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Unknown named parameter " + argsIn.begin()->first);
+    }
+    // Return request with named arguments transformed to positional arguments
+    return out;
+}
+
+UniValue CRPCTable::execute(const JSONRPCRequest &request) const
+{
+    // Return immediately if in warmup
+    {
+        LOCK(cs_rpcWarmup);
+        if (fRPCInWarmup)
+            throw JSONRPCError(RPC_IN_WARMUP, rpcWarmupStatus);
+    }
+
+    // Find method
+    const CRPCCommand *pcmd = tableRPC[request.strMethod];
+    if (!pcmd)
+        throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Method not found");
+
+    g_rpcSignals.PreCommand(*pcmd);
+
+    try
+    {
+        // Execute, convert arguments to array if necessary
+        if (request.params.isObject()) {
+            return pcmd->actor(transformNamedArguments(request, pcmd->argNames));
+        } else {
+            return pcmd->actor(request);
+        }
+    }
+    catch (const std::exception& e)
+    {
+        throw JSONRPCError(RPC_MISC_ERROR, e.what());
+    }
+
+    g_rpcSignals.PostCommand(*pcmd);
+}
+
+std::vector<std::string> CRPCTable::listCommands() const
+{
+    std::vector<std::string> commandList;
+    typedef std::map<std::string, const CRPCCommand*> commandMap;
+
+    std::transform( mapCommands.begin(), mapCommands.end(),
+                   std::back_inserter(commandList),
+                   boost::bind(&commandMap::value_type::first,_1) );
+    return commandList;
+}
+
+std::string CRPCTable::help(const std::string& strCommand, const JSONRPCRequest& helpreq) const
+{
+    std::string strRet;
+    std::string category;
+    std::set<rpcfn_type> setDone;
+    std::vector<std::pair<std::string, const CRPCCommand*> > vCommands;
+
+    for (std::map<std::string, const CRPCCommand*>::const_iterator mi = mapCommands.begin(); mi != mapCommands.end(); ++mi)
+        vCommands.push_back(make_pair(mi->second->category + mi->first, mi->second));
+    sort(vCommands.begin(), vCommands.end());
+
+    JSONRPCRequest jreq(helpreq);
+    jreq.fHelp = true;
+    jreq.params = UniValue();
+
+    BOOST_FOREACH(const PAIRTYPE(std::string, const CRPCCommand*)& command, vCommands)
+    {
+        const CRPCCommand *pcmd = command.second;
+        std::string strMethod = pcmd->name;
+        if ((strCommand != "" || pcmd->category == "hidden") && strMethod != strCommand)
+            continue;
+        jreq.strMethod = strMethod;
+        try
+        {
+            rpcfn_type pfn = pcmd->actor;
+            if (setDone.insert(pfn).second)
+                (*pfn)(jreq);
+        }
+        catch (const std::exception& e)
+        {
+            // Help text is returned in an exception
+            std::string strHelp = std::string(e.what());
+            if (strCommand == "")
+            {
+                if (strHelp.find('\n') != std::string::npos)
+                    strHelp = strHelp.substr(0, strHelp.find('\n'));
+
+                if (category != pcmd->category)
+                {
+                    if (!category.empty())
+                        strRet += "\n";
+                    category = pcmd->category;
+                    std::string firstLetter = category.substr(0,1);
+                    boost::to_upper(firstLetter);
+                    strRet += "== " + firstLetter + category.substr(1) + " ==\n";
+                }
+            }
+            strRet += strHelp + "\n";
+        }
+    }
+    if (strRet == "")
+        strRet = ("help: unknown command: %s\n", strCommand);
+    strRet = strRet.substr(0,strRet.size()-1);
+    return strRet;
+}
+
+const CRPCCommand *CRPCTable::operator[](const std::string &name) const
+{
+    std::map<std::string, const CRPCCommand*>::const_iterator it = mapCommands.find(name);
+    if (it == mapCommands.end())
+        return NULL;
+    return (*it).second;
+}
+
+UniValue help(const JSONRPCRequest& jsonRequest)
+{
+    if (jsonRequest.fHelp || jsonRequest.params.size() > 1)
+        throw std::runtime_error(
+            "help ( \"command\" )\n"
+            "\nList all commands, or get help for a specified command.\n"
+            "\nArguments:\n"
+            "1. \"command\"     (string, optional) The command to get help on\n"
+            "\nResult:\n"
+            "\"text\"     (string) The help text\n"
+        );
+
+    std::string strCommand;
+    if (jsonRequest.params.size() > 0)
+        strCommand = jsonRequest.params[0].get_str();
+
+    return tableRPC.help(strCommand, jsonRequest);
+}
+
+/**
+ * Call Table
+ */
+static const CRPCCommand vRPCCommands[] =
+{ //  category              name                      actor (function)         okSafe argNames
+  //  --------------------- ------------------------  -----------------------  ------ ----------
+    /* Overall control/query calls */
+    { "control",            "help",                   &help,                   true,  {"command"}  },
+};
+
+CRPCTable::CRPCTable()
+{
+    unsigned int vcidx;
+    for (vcidx = 0; vcidx < (sizeof(vRPCCommands) / sizeof(vRPCCommands[0])); vcidx++)
+    {
+        const CRPCCommand *pcmd;
+
+        pcmd = &vRPCCommands[vcidx];
+        mapCommands[pcmd->name] = pcmd;
+    }
+}
+
+void MilliSleep(int64_t n)
+{
+
+  /**
+   * Boost's sleep_for was uninterruptible when backed by nanosleep from 1.50
+   * until fixed in 1.52. Use the deprecated sleep method for the broken case.
+   * See: https://svn.boost.org/trac/boost/ticket/7238
+   */
+   boost::this_thread::sleep_for(boost::chrono::milliseconds(n));
+}
+
+static std::map<std::string, std::vector<std::string> > _mapMultiArgs;
+const std::map<std::string, std::vector<std::string> >& mapMultiArgs = _mapMultiArgs;
+
+/* Timer-creating functions */
+static RPCTimerInterface* timerInterface = NULL;
+
+/** WWW-Authenticate to present with 401 Unauthorized response */
+static const char* WWW_AUTH_HEADER_DATA = "Basic realm=\"jsonrpc\"";
+
+/** Simple one-shot callback timer to be used by the RPC mechanism to e.g.
+ * re-lock the wallet.
+ */
+class HTTPRPCTimer : public RPCTimerBase
+{
+public:
+    HTTPRPCTimer(struct event_base* eventBase, boost::function<void(void)>& func, int64_t millis) :
+        ev(eventBase, false, func)
+    {
+        struct timeval tv;
+        tv.tv_sec = millis/1000;
+        tv.tv_usec = (millis%1000)*1000;
+        ev.trigger(&tv);
+    }
+private:
+    HTTPEvent ev;
+};
+
+class HTTPRPCTimerInterface : public RPCTimerInterface
+{
+public:
+    HTTPRPCTimerInterface(struct event_base* _base) : base(_base)
+    {
+    }
+    const char* Name()
+    {
+        return "HTTP";
+    }
+    RPCTimerBase* NewTimer(boost::function<void(void)>& func, int64_t millis)
+    {
+        return new HTTPRPCTimer(base, func, millis);
+    }
+private:
+    struct event_base* base;
+};
+
+/* Pre-base64-encoded authentication token */
+static std::string strRPCUserColonPass;
+/* Stored RPC timer interface (for unregistration) */
+static HTTPRPCTimerInterface* httpRPCTimerInterface = 0;
+
+static void JSONErrorReply(HTTPRequest* req, const UniValue& objError, const UniValue& id)
+{
+    // Send error reply from json-rpc error object
+    int nStatus = HTTP_INTERNAL_SERVER_ERROR;
+    int code = find_value(objError, "code").get_int();
+
+    if (code == RPC_INVALID_REQUEST)
+        nStatus = HTTP_BAD_REQUEST;
+    else if (code == RPC_METHOD_NOT_FOUND)
+        nStatus = HTTP_NOT_FOUND;
+
+    std::string strReply = JSONRPCReply(NullUniValue, objError, id);
+
+    req->WriteHeader("Content-Type", "application/json");
+    req->WriteReply(nStatus, strReply);
+}
+
+//This function checks username and password against -rpcauth
+//entries from config file.
+static bool multiUserAuthorized(std::string strUserPass)
+{
+    if (strUserPass.find(":") == std::string::npos) {
+        return false;
+    }
+    std::string strUser = strUserPass.substr(0, strUserPass.find(":"));
+    std::string strPass = strUserPass.substr(strUserPass.find(":") + 1);
+
+    if (mapMultiArgs.count("-rpcauth") > 0) {
+        //Search for multi-user login/pass "rpcauth" from config
+        BOOST_FOREACH(std::string strRPCAuth, mapMultiArgs.at("-rpcauth"))
+        {
+            std::vector<std::string> vFields;
+            boost::split(vFields, strRPCAuth, boost::is_any_of(":$"));
+            if (vFields.size() != 3) {
+                //Incorrect formatting in config file
+                continue;
+            }
+
+            std::string strName = vFields[0];
+            if (!TimingResistantEqual(strName, strUser)) {
+                continue;
+            }
+
+            std::string strSalt = vFields[1];
+            std::string strHash = vFields[2];
+
+            static const unsigned int KEY_SIZE = 32;
+            unsigned char out[KEY_SIZE];
+
+            CHMAC_SHA256(reinterpret_cast<const unsigned char*>(strSalt.c_str()), strSalt.size()).Write(reinterpret_cast<const unsigned char*>(strPass.c_str()), strPass.size()).Finalize(out);
+            std::vector<unsigned char> hexvec(out, out+KEY_SIZE);
+            std::string strHashFromPass = HexStr(hexvec);
+
+            if (TimingResistantEqual(strHashFromPass, strHash)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool RPCAuthorized(const std::string& strAuth, std::string& strAuthUsernameOut)
+{
+    if (strRPCUserColonPass.empty()) // Belt-and-suspenders measure if InitRPCAuthentication was not called
+        return false;
+    if (strAuth.substr(0, 6) != "Basic ")
+        return false;
+    std::string strUserPass64 = strAuth.substr(6);
+    boost::trim(strUserPass64);
+    std::string strUserPass = DecodeBase64(strUserPass64);
+
+    if (strUserPass.find(":") != std::string::npos)
+        strAuthUsernameOut = strUserPass.substr(0, strUserPass.find(":"));
+
+    //Check if authorized under single-user field
+    if (TimingResistantEqual(strUserPass, strRPCUserColonPass)) {
+        return true;
+    }
+    return multiUserAuthorized(strUserPass);
+}
+
+static bool HTTPReq_JSONRPC(HTTPRequest* req, const std::string &)
+{
+    // JSONRPC handles only POST
+    if (req->GetRequestMethod() != HTTPRequest::POST) {
+        req->WriteReply(HTTP_BAD_METHOD, "JSONRPC server handles only POST requests");
+        return false;
+    }
+    // Check authorization
+    std::pair<bool, std::string> authHeader = req->GetHeader("authorization");
+    if (!authHeader.first) {
+        req->WriteHeader("WWW-Authenticate", WWW_AUTH_HEADER_DATA);
+        req->WriteReply(HTTP_UNAUTHORIZED);
+        return false;
+    }
+
+    JSONRPCRequest jreq;
+    if (!RPCAuthorized(authHeader.second, jreq.authUser)) {
+        syslog(LOG_NOTICE, ("ThreadRPCServer incorrect password attempt from localhost otus"));
+
+        /* Deter brute-forcing
+           If this results in a DoS the user really
+           shouldn't have their RPC port exposed. */
+        MilliSleep(250);
+
+        req->WriteHeader("WWW-Authenticate", WWW_AUTH_HEADER_DATA);
+        req->WriteReply(HTTP_UNAUTHORIZED);
+        return false;
+    }
+
+    try {
+        // Parse request
+        UniValue valRequest;
+        if (!valRequest.read(req->ReadBody()))
+            throw JSONRPCError(RPC_PARSE_ERROR, "Parse error");
+
+        // Set the URI
+        jreq.URI = req->GetURI();
+
+        std::string strReply;
+        // singleton request
+        if (valRequest.isObject()) {
+            jreq.parse(valRequest);
+
+            UniValue result = tableRPC.execute(jreq);
+
+            // Send reply
+            strReply = JSONRPCReply(result, NullUniValue, jreq.id);
+
+        // array of requests
+        } else if (valRequest.isArray())
+            strReply = JSONRPCExecBatch(valRequest.get_array());
+        else
+            throw JSONRPCError(RPC_PARSE_ERROR, "Top-level object parse error");
+
+        req->WriteHeader("Content-Type", "application/json");
+        req->WriteReply(HTTP_OK, strReply);
+    } catch (const UniValue& objError) {
+        JSONErrorReply(req, objError, jreq.id);
+        return false;
+    } catch (const std::exception& e) {
+        JSONErrorReply(req, JSONRPCError(RPC_PARSE_ERROR, e.what()), jreq.id);
+        return false;
+    }
+    return true;
+}
+
+static bool InitRPCAuthentication()
+{
+    strRPCUserColonPass = "OK";//("user" + ":" + "password");
+    return true;
+}
+
+void RPCSetTimerInterfaceIfUnset(RPCTimerInterface *iface)
+{
+    if (!timerInterface)
+        timerInterface = iface;
+}
+
+void RPCSetTimerInterface(RPCTimerInterface *iface)
+{
+    timerInterface = iface;
+}
+
+void RPCUnsetTimerInterface(RPCTimerInterface *iface)
+{
+    if (timerInterface == iface)
+        timerInterface = NULL;
+}
+
+bool StartHTTPRPC()
+{
+    syslog(LOG_NOTICE, "rpc: Starting HTTP RPC server");
+    if (!InitRPCAuthentication())
+        return false;
+
+    RegisterHTTPHandler("/", true, HTTPReq_JSONRPC);
+
+    assert(EventBase());
+    httpRPCTimerInterface = new HTTPRPCTimerInterface(EventBase());
+    RPCSetTimerInterface(httpRPCTimerInterface);
+    return true;
+}
+
+void InterruptHTTPRPC()
+{
+    syslog(LOG_NOTICE, "rpc: Interrupting HTTP RPC server");
+}
+
+void StopHTTPRPC()
+{
+    syslog(LOG_NOTICE, "rpc: Stopping HTTP RPC server");
+    UnregisterHTTPHandler("/", true);
+    if (httpRPCTimerInterface) {
+        RPCUnsetTimerInterface(httpRPCTimerInterface);
+        delete httpRPCTimerInterface;
+        httpRPCTimerInterface = 0;
+    }
 }
 
 namespace
@@ -1393,10 +2527,8 @@ int main(int argc, const char** argv)
       return false;
   if (!StartRPC())
       return false;
-  // if (!StartHTTPRPC())
-  //     return false;
-  // if (GetBoolArg("-rest", DEFAULT_REST_ENABLE) && !StartREST())
-  //     return false;
+  if (!StartHTTPRPC())
+      return false;
   if (!StartHTTPServer())
       return false;
 
