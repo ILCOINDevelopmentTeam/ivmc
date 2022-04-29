@@ -1974,6 +1974,26 @@ void CHMAC_SHA256::Finalize(unsigned char hash[OUTPUT_SIZE])
     outer.Write(temp, 32).Finalize(hash);
 }
 
+// ------------------------------- RPC_CLIENT_P2P_DISABLED
+UniValue help_rpc(const JSONRPCRequest& jsonRequest)
+{
+    if (jsonRequest.fHelp || jsonRequest.params.size() > 1)
+        throw std::runtime_error(
+            "help ( \"command\" )\n"
+            "\nList all commands, or get help for a specified command.\n"
+            "\nArguments:\n"
+            "1. \"command\"     (string, optional) The command to get help on\n"
+            "\nResult:\n"
+            "\"text\"     (string) The help text\n"
+        );
+
+    std::string strCommand;
+    if (jsonRequest.params.size() > 0)
+        strCommand = jsonRequest.params[0].get_str();
+
+    return tableRPC.help(strCommand, jsonRequest);
+}
+
 /**
  * Process named arguments into a vector of positional arguments, based on the
  * passed-in specification for the RPC call's arguments.
@@ -2026,19 +2046,35 @@ UniValue CRPCTable::execute(const JSONRPCRequest &request) const
     }
 
     // Find method
+    syslog(LOG_NOTICE, ("execute strMethod 1 " + request.strMethod).c_str());
     const CRPCCommand *pcmd = tableRPC[request.strMethod];
     if (!pcmd)
         throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Method not found");
 
+    syslog(LOG_NOTICE, ("execute strMethod 2 " + request.strMethod).c_str());
+
     g_rpcSignals.PreCommand(*pcmd);
+
+    syslog(LOG_NOTICE, ("execute strMethod 3 " + request.strMethod).c_str());
 
     try
     {
         // Execute, convert arguments to array if necessary
         if (request.params.isObject()) {
+            syslog(LOG_NOTICE, ("execute strMethod 4 " + request.strMethod).c_str());
             return pcmd->actor(transformNamedArguments(request, pcmd->argNames));
         } else {
-            return pcmd->actor(request);
+            syslog(LOG_NOTICE, ("execute strMethod 5 " + request.strMethod).c_str());
+
+            // rpcfn_type method = pcmd->actor;
+            rpcfn_type method = &help_rpc;
+            if(method){
+              syslog(LOG_NOTICE, ("execute strMethod 8 " + request.strMethod).c_str());
+              UniValue result = (*method)(request);
+              return result;
+            }
+            else throw JSONRPCError(RPC_MISC_ERROR, "actor empty");
+            // return pcmd->actor(request);
         }
     }
     catch (const std::exception& e)
@@ -2046,7 +2082,11 @@ UniValue CRPCTable::execute(const JSONRPCRequest &request) const
         throw JSONRPCError(RPC_MISC_ERROR, e.what());
     }
 
+    syslog(LOG_NOTICE, ("execute strMethod 6" + request.strMethod).c_str());
+
     g_rpcSignals.PostCommand(*pcmd);
+
+    syslog(LOG_NOTICE, ("execute strMethod 7" + request.strMethod).c_str());
 }
 
 std::vector<std::string> CRPCTable::listCommands() const
@@ -2068,7 +2108,10 @@ std::string CRPCTable::help(const std::string& strCommand, const JSONRPCRequest&
     std::vector<std::pair<std::string, const CRPCCommand*> > vCommands;
 
     for (std::map<std::string, const CRPCCommand*>::const_iterator mi = mapCommands.begin(); mi != mapCommands.end(); ++mi)
+    {
         vCommands.push_back(make_pair(mi->second->category + mi->first, mi->second));
+    }
+
     sort(vCommands.begin(), vCommands.end());
 
     JSONRPCRequest jreq(helpreq);
@@ -2090,6 +2133,7 @@ std::string CRPCTable::help(const std::string& strCommand, const JSONRPCRequest&
         }
         catch (const std::exception& e)
         {
+            syslog(LOG_NOTICE, "help funcion N");
             // Help text is returned in an exception
             std::string strHelp = std::string(e.what());
             if (strCommand == "")
@@ -2124,45 +2168,29 @@ const CRPCCommand *CRPCTable::operator[](const std::string &name) const
     return (*it).second;
 }
 
-UniValue help(const JSONRPCRequest& jsonRequest)
+bool CRPCTable::appendCommand(const std::string& name, const CRPCCommand* pcmd)
 {
-    if (jsonRequest.fHelp || jsonRequest.params.size() > 1)
-        throw std::runtime_error(
-            "help ( \"command\" )\n"
-            "\nList all commands, or get help for a specified command.\n"
-            "\nArguments:\n"
-            "1. \"command\"     (string, optional) The command to get help on\n"
-            "\nResult:\n"
-            "\"text\"     (string) The help text\n"
-        );
+    if (IsRPCRunning())
+        return false;
 
-    std::string strCommand;
-    if (jsonRequest.params.size() > 0)
-        strCommand = jsonRequest.params[0].get_str();
+    // don't allow overwriting for now
+    std::map<std::string, const CRPCCommand*>::const_iterator it = mapCommands.find(name);
+    if (it != mapCommands.end())
+        return false;
 
-    return tableRPC.help(strCommand, jsonRequest);
+    mapCommands[name] = pcmd;
+    return true;
 }
-
-/**
- * Call Table
- */
-static const CRPCCommand vRPCCommands[] =
-{ //  category              name                      actor (function)         okSafe argNames
-  //  --------------------- ------------------------  -----------------------  ------ ----------
-    /* Overall control/query calls */
-    { "control",            "help",                   &help,                   true,  {"command"}  },
-};
 
 CRPCTable::CRPCTable()
 {
-    unsigned int vcidx;
-    for (vcidx = 0; vcidx < (sizeof(vRPCCommands) / sizeof(vRPCCommands[0])); vcidx++)
-    {
-        const CRPCCommand *pcmd;
-
-        pcmd = &vRPCCommands[vcidx];
-        mapCommands[pcmd->name] = pcmd;
-    }
+    CRPCCommand _pcmd;
+    _pcmd.category = "control";
+    _pcmd.name = "help";
+    _pcmd.actor = &help_rpc;
+    _pcmd.okSafeMode = true;
+    _pcmd.argNames = {"command"};
+    appendCommand("help", &_pcmd);
 }
 
 void MilliSleep(int64_t n)
@@ -2375,7 +2403,7 @@ static bool HTTPReq_JSONRPC(HTTPRequest* req, const std::string &)
 
 static bool InitRPCAuthentication()
 {
-    strRPCUserColonPass = "OK";//("user" + ":" + "password");
+    strRPCUserColonPass = "user:password";
     return true;
 }
 
@@ -2520,7 +2548,7 @@ int main(int argc, const char** argv)
   close(STDERR_FILENO);
 
   // Daemon-specific intialization should go here
-  const int SLEEP_INTERVAL = 5;
+  const int SLEEP_INTERVAL = 60;
 
   // Init Server
   if (!InitHTTPServer())
@@ -2531,6 +2559,8 @@ int main(int argc, const char** argv)
       return false;
   if (!StartHTTPServer())
       return false;
+
+  SetRPCWarmupFinished();
 
   // Enter daemon loop
   uint c = 0;

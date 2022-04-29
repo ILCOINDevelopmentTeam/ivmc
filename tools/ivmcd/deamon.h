@@ -381,16 +381,6 @@ static inline bool jsonTokenIsValue(enum jtokentype jtt)
 
 extern const UniValue NullUniValue;
 
-class CRPCCommand;
-
-namespace RPCServer
-{
-    void OnStarted(boost::function<void ()> slot);
-    void OnStopped(boost::function<void ()> slot);
-    void OnPreCommand(boost::function<void (const CRPCCommand&)> slot);
-    void OnPostCommand(boost::function<void (const CRPCCommand&)> slot);
-}
-
 /** Wrapper for UniValue::VType, which includes typeAny:
  * Used to denote don't care type. Only used by RPCTypeCheckObj */
 struct UniValueType {
@@ -573,6 +563,14 @@ public:
     bool okSafeMode;
     std::vector<std::string> argNames;
 };
+
+namespace RPCServer
+{
+    void OnStarted(boost::function<void ()> slot);
+    void OnStopped(boost::function<void ()> slot);
+    void OnPreCommand(boost::function<void (const CRPCCommand&)> slot);
+    void OnPostCommand(boost::function<void (const CRPCCommand&)> slot);
+}
 
 /**
  * Ilcoin RPC command dispatcher.
