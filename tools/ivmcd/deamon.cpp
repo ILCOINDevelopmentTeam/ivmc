@@ -2454,36 +2454,55 @@ void StopHTTPRPC()
     }
 }
 
+// --------------------------------- IVMC
+/// Returns the input str if already valid hex string. Otherwise, interprets the str as a file
+/// name and loads the file content.
+/// @todo The file content is expected to be a hex string but not validated.
+std::string load_hex(const std::string &str)
+{
+    const auto error_code = ivmc::validate_hex(str);
+    if (!error_code)
+        return str;
+
+    // Must be a file path.
+    std::ifstream file{str};
+    return std::string(std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{});
+}
+
+struct HexValidator : public CLI::Validator
+{
+    HexValidator() : CLI::Validator{"HEX"}
+    {
+        name_ = "HEX";
+        func_ = [](const std::string &str) -> std::string {
+            const auto error_code = ivmc::validate_hex(str);
+            if (error_code)
+                return error_code.message();
+            return {};
+        };
+    }
+};
+
+bool InitIVMC()
+{
+    static HexValidator Hex;
+
+    std::string vm_config;
+    std::string code_arg;
+    int64_t gas = 1000000;
+    auto rev = IVMC_LATEST_STABLE_REVISION;
+    std::string input_arg;
+    std::string storage_arg;
+    std::string recipient_arg;
+    std::string sender_arg;
+    auto create = false;
+    auto bench = false;
+
+    return true;
+}
+
 namespace
 {
-  /// Returns the input str if already valid hex string. Otherwise, interprets the str as a file
-  /// name and loads the file content.
-  /// @todo The file content is expected to be a hex string but not validated.
-  std::string load_hex(const std::string &str)
-  {
-      const auto error_code = ivmc::validate_hex(str);
-      if (!error_code)
-          return str;
-
-      // Must be a file path.
-      std::ifstream file{str};
-      return std::string(std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{});
-  }
-
-  struct HexValidator : public CLI::Validator
-  {
-      HexValidator() : CLI::Validator{"HEX"}
-      {
-          name_ = "HEX";
-          func_ = [](const std::string &str) -> std::string {
-              const auto error_code = ivmc::validate_hex(str);
-              if (error_code)
-                  return error_code.message();
-              return {};
-          };
-      }
-  };
-
   void do_heartbeat(int count)
   {
      // TODO: implement processing code to be performed on each heartbeat
@@ -2558,6 +2577,8 @@ int main(int argc, const char** argv)
   if (!StartHTTPRPC())
       return false;
   if (!StartHTTPServer())
+      return false;
+  if (!InitIVMC())
       return false;
 
   SetRPCWarmupFinished();
