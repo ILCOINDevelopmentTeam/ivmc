@@ -281,6 +281,10 @@ int run2(ivmc::VM& vm,
     msg.recipient = create_address;
     msg.sender = create_address;
 
+    syslog(LOG_NOTICE, ("run: " + code_hex).c_str());
+    syslog(LOG_NOTICE, ("run: " + input_hex).c_str());
+    syslog(LOG_NOTICE, ("run: " + storage_hex).c_str());
+
     std::string full_address_storage_tmp = storage_hex;
 
     int pos_str = 0;
@@ -335,7 +339,7 @@ int run2(ivmc::VM& vm,
     if (result.status_code == IVMC_SUCCESS || result.status_code == IVMC_REVERT)
         out << "Output:   " << hex({result.output_data, result.output_size}) << "\n";
 
-    syslog(LOG_NOTICE, hex({result.output_data, result.output_size}).c_str());
+    syslog(LOG_NOTICE, ("run: " + hex({result.output_data, result.output_size})).c_str());
 
     if(host2.account_exists(msg.recipient)){
 
@@ -378,6 +382,7 @@ int run2(ivmc::VM& vm,
       }
 
       out << "Storage:   " << full_address_storage << "\n";
+      syslog(LOG_NOTICE, ("run: " + full_address_storage).c_str());
     }
 
     return 0;
