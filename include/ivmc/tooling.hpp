@@ -19,4 +19,15 @@ int run(ivmc::VM& vm,
         bool create,
         bool bench,
         std::ostream& out);
+
+
+int run2(ivmc::VM& vm,
+        ivmc_revision rev,
+        int64_t gas,
+        const std::string& code_hex,
+        const std::string& input_hex,
+        const std::string& storage_hex,
+        const std::string& recipient,
+        const std::string& sender,
+        std::ostream& out);
 }  // namespace ivmc::tooling
