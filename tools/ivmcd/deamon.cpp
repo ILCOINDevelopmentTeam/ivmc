@@ -1974,6 +1974,171 @@ void CHMAC_SHA256::Finalize(unsigned char hash[OUTPUT_SIZE])
     outer.Write(temp, 32).Finalize(hash);
 }
 
+// --------------------------------- IVMC
+/// Returns the input str if already valid hex string. Otherwise, interprets the str as a file
+/// name and loads the file content.
+/// @todo The file content is expected to be a hex string but not validated.
+std::string load_hex(const std::string &str)
+{
+    const auto error_code = ivmc::validate_hex(str);
+    if (!error_code)
+        return str;
+
+    // Must be a file path.
+    std::ifstream file{str};
+    return std::string(std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{});
+}
+
+struct HexValidator : public CLI::Validator
+{
+    HexValidator() : CLI::Validator{"HEX"}
+    {
+        name_ = "HEX";
+        func_ = [](const std::string &str) -> std::string {
+            const auto error_code = ivmc::validate_hex(str);
+            if (error_code)
+                return error_code.message();
+            return {};
+        };
+    }
+};
+
+bool InitIVMC()
+{
+    static HexValidator Hex;
+
+    std::string vm_config_arg;
+    std::string code_arg;
+    int64_t gas = 1000000;
+    auto rev = IVMC_LATEST_STABLE_REVISION;
+    std::string input_arg;
+    std::string storage_arg;
+    std::string recipient_arg;
+    std::string sender_arg;
+
+    return true;
+}
+
+int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string input_arg, std::string storage_arg, std::string recipient_arg, std::string sender_arg)
+{
+    using namespace ivmc;
+
+    static HexValidator Hex;
+
+    int64_t gas = 1000000000; //Hard coded
+    auto rev = IVMC_LATEST_STABLE_REVISION;  //Hard coded
+
+    CLI::App app{"IVMC tool"};
+
+    try
+    {
+        syslog(LOG_NOTICE, "ivmc: Init VM");
+
+        ivmc::VM vm;
+        ivmc_loader_error_code ec;
+        vm = VM{ivmc_load_and_configure(vm_config_arg.c_str(), &ec)};
+        if (ec != IVMC_LOADER_SUCCESS)
+        {
+            const auto error = ivmc_last_error_msg();
+            if (error != nullptr)
+                std::cerr << error << "\n";
+            else
+                std::cerr << "Loading error " << ec << "\n";
+            return static_cast<int>(ec);
+        }
+
+        syslog(LOG_NOTICE, "ivmc: Staring execution");
+
+        std::cout << "Config: " << vm_config_arg << "\n";
+
+        const auto code_hex = load_hex(code_arg);
+        const auto input_hex = load_hex(input_arg);
+        const auto storage_hex = load_hex(storage_arg);
+        // If code_hex or input_hex or storage_hex is not valid hex string an exception is thrown.
+        tooling::run2(vm, rev, gas, code_hex, input_hex, storage_hex, recipient_arg, sender_arg, std::cout);
+
+        std::stringstream ss;
+        ss << std::cout.rdbuf();
+        std::string myString = ss.str();
+
+        syslog(LOG_NOTICE, myString.c_str());
+
+        syslog(LOG_NOTICE, "ivmc: End execution");
+
+        return 0;
+    }
+    catch (const CLI::ParseError& e)
+    {
+        return app.exit(e);
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "Error: " << e.what() << "\n";
+        return -1;
+    }
+    catch (...)
+    {
+        return -2;
+    }
+}
+
+// ------------------------------- RPC_CLIENT_P2P_DISABLED
+UniValue help_rpc(const JSONRPCRequest& jsonRequest)
+{
+    if (jsonRequest.fHelp || jsonRequest.params.size() > 1)
+        throw std::runtime_error(
+            "help ( \"command\" )\n"
+            "\nList all commands, or get help for a specified command.\n"
+            "\nArguments:\n"
+            "1. \"command\"     (string, optional) The command to get help on\n"
+            "\nResult:\n"
+            "\"text\"     (string) The help text\n"
+        );
+
+    std::string strCommand;
+    if (jsonRequest.params.size() > 0)
+        strCommand = jsonRequest.params[0].get_str();
+
+    return tableRPC.help(strCommand, jsonRequest);
+}
+
+UniValue exe_ivmc_rpc(const JSONRPCRequest& jsonRequest)
+{
+    if (jsonRequest.fHelp || jsonRequest.params.size() != 4)
+        throw std::runtime_error(
+            "exeIVMC ( \"vm_config\", \"code\", \"input\", \"storage\" )\n"
+            "\nExecute the IVMC passing the parameters code, input and storage.\n"
+            "\nArguments:\n"
+            "1. \"vm_config\"     (string, required) The vm congig file\n"
+            "2. \"code\"          (string, required) The code to execute\n"
+            "3. \"input\"         (string, required) The input parameter\n"
+            "4. \"storage\"       (string, required) The storage parameter\n"
+            "\nResult:\n"
+            "\"output\"     (string) The execution smart contract result\n"
+        );
+
+    std::string vm_config_arg;
+    if (jsonRequest.params.size() > 0)
+        vm_config_arg = jsonRequest.params[0].get_str();
+
+    std::string code_arg;
+    if (jsonRequest.params.size() > 1)
+        code_arg = jsonRequest.params[1].get_str();
+
+    std::string input_arg;
+    if (jsonRequest.params.size() > 2)
+        input_arg = jsonRequest.params[2].get_str();
+
+    std::string storage_arg;
+    if (jsonRequest.params.size() > 3)
+        storage_arg = jsonRequest.params[3].get_str();
+
+    std::string recipient_arg = "";
+    std::string sender_arg    = "";
+
+    return ExecuteIVMC(vm_config_arg, code_arg, input_arg, storage_arg, recipient_arg, sender_arg);
+}
+
 /**
  * Process named arguments into a vector of positional arguments, based on the
  * passed-in specification for the RPC call's arguments.
@@ -2014,6 +2179,59 @@ static inline JSONRPCRequest transformNamedArguments(const JSONRPCRequest& in, c
     }
     // Return request with named arguments transformed to positional arguments
     return out;
+}
+
+UniValue CRPCTable::execute(const JSONRPCRequest &request) const
+{
+    // Return immediately if in warmup
+    {
+        LOCK(cs_rpcWarmup);
+        if (fRPCInWarmup)
+            throw JSONRPCError(RPC_IN_WARMUP, rpcWarmupStatus);
+    }
+
+    // Find method
+    syslog(LOG_NOTICE, ("execute strMethod 1 " + request.strMethod).c_str());
+    const CRPCCommand *pcmd = tableRPC[request.strMethod];
+    if (!pcmd)
+        throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Method not found");
+
+    syslog(LOG_NOTICE, ("execute strMethod 2 " + request.strMethod).c_str());
+
+    g_rpcSignals.PreCommand(*pcmd);
+
+    syslog(LOG_NOTICE, ("execute strMethod 3 " + request.strMethod).c_str());
+
+    try
+    {
+        // Execute, convert arguments to array if necessary
+        if (request.params.isObject()) {
+            syslog(LOG_NOTICE, ("execute strMethod 4 " + request.strMethod).c_str());
+            return pcmd->actor(transformNamedArguments(request, pcmd->argNames));
+        } else {
+            syslog(LOG_NOTICE, ("execute strMethod 5 " + request.strMethod).c_str());
+
+            // rpcfn_type method = pcmd->actor;
+            rpcfn_type method = &help_rpc;
+            if(method){
+              syslog(LOG_NOTICE, ("execute strMethod 8 " + request.strMethod).c_str());
+              UniValue result = (*method)(request);
+              return result;
+            }
+            else throw JSONRPCError(RPC_MISC_ERROR, "actor empty");
+            // return pcmd->actor(request);
+        }
+    }
+    catch (const std::exception& e)
+    {
+        throw JSONRPCError(RPC_MISC_ERROR, e.what());
+    }
+
+    syslog(LOG_NOTICE, ("execute strMethod 6" + request.strMethod).c_str());
+
+    g_rpcSignals.PostCommand(*pcmd);
+
+    syslog(LOG_NOTICE, ("execute strMethod 7" + request.strMethod).c_str());
 }
 
 std::vector<std::string> CRPCTable::listCommands() const
@@ -2107,6 +2325,25 @@ bool CRPCTable::appendCommand(const std::string& name, const CRPCCommand* pcmd)
 
     mapCommands[name] = pcmd;
     return true;
+}
+
+CRPCTable::CRPCTable()
+{
+    CRPCCommand _help_cmd;
+    _help_cmd.category = "control";
+    _help_cmd.name = "help";
+    _help_cmd.actor = &help_rpc;
+    _help_cmd.okSafeMode = true;
+    _help_cmd.argNames = {"command"};
+    appendCommand("help", &_help_cmd);
+
+    CRPCCommand _exe_ivmc_cmd;
+    _exe_ivmc_cmd.category = "ivmc";
+    _exe_ivmc_cmd.name = "executeivmc";
+    _exe_ivmc_cmd.actor = &exe_ivmc_rpc;
+    _exe_ivmc_cmd.okSafeMode = true;
+    _exe_ivmc_cmd.argNames = {"vm_config", "code", "input", "storage"};
+    appendCommand("executeivmc", &_exe_ivmc_cmd);
 }
 
 void MilliSleep(int64_t n)
@@ -2368,245 +2605,6 @@ void StopHTTPRPC()
         delete httpRPCTimerInterface;
         httpRPCTimerInterface = 0;
     }
-}
-
-// --------------------------------- IVMC
-/// Returns the input str if already valid hex string. Otherwise, interprets the str as a file
-/// name and loads the file content.
-/// @todo The file content is expected to be a hex string but not validated.
-std::string load_hex(const std::string &str)
-{
-    const auto error_code = ivmc::validate_hex(str);
-    if (!error_code)
-        return str;
-
-    // Must be a file path.
-    std::ifstream file{str};
-    return std::string(std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{});
-}
-
-struct HexValidator : public CLI::Validator
-{
-    HexValidator() : CLI::Validator{"HEX"}
-    {
-        name_ = "HEX";
-        func_ = [](const std::string &str) -> std::string {
-            const auto error_code = ivmc::validate_hex(str);
-            if (error_code)
-                return error_code.message();
-            return {};
-        };
-    }
-};
-
-bool InitIVMC()
-{
-    static HexValidator Hex;
-
-    std::string vm_config_arg;
-    std::string code_arg;
-    int64_t gas = 1000000;
-    auto rev = IVMC_LATEST_STABLE_REVISION;
-    std::string input_arg;
-    std::string storage_arg;
-    std::string recipient_arg;
-    std::string sender_arg;
-
-    return true;
-}
-
-int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string input_arg, std::string storage_arg, std::string recipient_arg, std::string sender_arg)
-{
-    using namespace ivmc;
-
-    static HexValidator Hex;
-
-    int64_t gas = 1000000000; //Hard coded
-    auto rev = IVMC_LATEST_STABLE_REVISION;  //Hard coded
-
-    CLI::App app{"IVMC tool"};
-
-    try
-    {
-        syslog(LOG_NOTICE, "ivmc: Init VM");
-
-        ivmc::VM vm;
-        ivmc_loader_error_code ec;
-        vm = VM{ivmc_load_and_configure(vm_config_arg.c_str(), &ec)};
-        if (ec != IVMC_LOADER_SUCCESS)
-        {
-            const auto error = ivmc_last_error_msg();
-            if (error != nullptr)
-                std::cerr << error << "\n";
-            else
-                std::cerr << "Loading error " << ec << "\n";
-            return static_cast<int>(ec);
-        }
-
-        syslog(LOG_NOTICE, "ivmc: Staring execution");
-
-        std::cout << "Config: " << vm_config_arg << "\n";
-
-        const auto code_hex = load_hex(code_arg);
-        const auto input_hex = load_hex(input_arg);
-        const auto storage_hex = load_hex(storage_arg);
-        // If code_hex or input_hex or storage_hex is not valid hex string an exception is thrown.
-        tooling::run2(vm, rev, gas, code_hex, input_hex, storage_hex, recipient_arg, sender_arg, std::cout);
-
-        std::stringstream ss;
-        ss << std::cout.rdbuf();
-        std::string myString = ss.str();
-
-        syslog(LOG_NOTICE, myString.c_str());
-
-        syslog(LOG_NOTICE, "ivmc: End execution");
-
-        return 0;
-    }
-    catch (const CLI::ParseError& e)
-    {
-        return app.exit(e);
-    }
-    catch (const std::exception& e)
-    {
-        std::cerr << "Error: " << e.what() << "\n";
-        return -1;
-    }
-    catch (...)
-    {
-        return -2;
-    }
-}
-
-// ------------------------------- RPC_CLIENT
-UniValue help_rpc(const JSONRPCRequest& jsonRequest)
-{
-    if (jsonRequest.fHelp || jsonRequest.params.size() > 1)
-        throw std::runtime_error(
-            "help ( \"command\" )\n"
-            "\nList all commands, or get help for a specified command.\n"
-            "\nArguments:\n"
-            "1. \"command\"     (string, optional) The command to get help on\n"
-            "\nResult:\n"
-            "\"text\"     (string) The help text\n"
-        );
-
-    std::string strCommand;
-    if (jsonRequest.params.size() > 0)
-        strCommand = jsonRequest.params[0].get_str();
-
-    return tableRPC.help(strCommand, jsonRequest);
-}
-
-UniValue exe_ivmc_rpc(const JSONRPCRequest& jsonRequest)
-{
-    if (jsonRequest.fHelp || jsonRequest.params.size() != 4)
-        throw std::runtime_error(
-            "exeIVMC ( \"vm_config\", \"code\", \"input\", \"storage\" )\n"
-            "\nExecute the IVMC passing the parameters code, input and storage.\n"
-            "\nArguments:\n"
-            "1. \"vm_config\"     (string, required) The vm congig file\n"
-            "2. \"code\"          (string, required) The code to execute\n"
-            "3. \"input\"         (string, required) The input parameter\n"
-            "4. \"storage\"       (string, required) The storage parameter\n"
-            "\nResult:\n"
-            "\"output\"     (string) The execution smart contract result\n"
-        );
-
-    std::string vm_config_arg;
-    if (jsonRequest.params.size() > 0)
-        vm_config_arg = jsonRequest.params[0].get_str();
-
-    std::string code_arg;
-    if (jsonRequest.params.size() > 1)
-        code_arg = jsonRequest.params[1].get_str();
-
-    std::string input_arg;
-    if (jsonRequest.params.size() > 2)
-        input_arg = jsonRequest.params[2].get_str();
-
-    std::string storage_arg;
-    if (jsonRequest.params.size() > 3)
-        storage_arg = jsonRequest.params[3].get_str();
-
-    std::string recipient_arg = "";
-    std::string sender_arg    = "";
-
-    return ExecuteIVMC(vm_config_arg, code_arg, input_arg, storage_arg, recipient_arg, sender_arg);
-}
-
-
-
-UniValue CRPCTable::execute(const JSONRPCRequest &request) const
-{
-    // Return immediately if in warmup
-    {
-        LOCK(cs_rpcWarmup);
-        if (fRPCInWarmup)
-            throw JSONRPCError(RPC_IN_WARMUP, rpcWarmupStatus);
-    }
-
-    // Find method
-    syslog(LOG_NOTICE, ("execute strMethod 1 " + request.strMethod).c_str());
-    const CRPCCommand *pcmd = tableRPC[request.strMethod];
-    if (!pcmd)
-        throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Method not found");
-
-    syslog(LOG_NOTICE, ("execute strMethod 2 " + request.strMethod).c_str());
-
-    g_rpcSignals.PreCommand(*pcmd);
-
-    syslog(LOG_NOTICE, ("execute strMethod 3 " + request.strMethod).c_str());
-
-    try
-    {
-        // Execute, convert arguments to array if necessary
-        if (request.params.isObject()) {
-            syslog(LOG_NOTICE, ("execute strMethod 4 " + request.strMethod).c_str());
-            return pcmd->actor(transformNamedArguments(request, pcmd->argNames));
-        } else {
-            syslog(LOG_NOTICE, ("execute strMethod 5 " + request.strMethod).c_str());
-
-            // rpcfn_type method = pcmd->actor;
-            rpcfn_type method = &help_rpc;
-            if(method){
-              syslog(LOG_NOTICE, ("execute strMethod 8 " + request.strMethod).c_str());
-              UniValue result = (*method)(request);
-              return result;
-            }
-            else throw JSONRPCError(RPC_MISC_ERROR, "actor empty");
-            // return pcmd->actor(request);
-        }
-    }
-    catch (const std::exception& e)
-    {
-        throw JSONRPCError(RPC_MISC_ERROR, e.what());
-    }
-
-    syslog(LOG_NOTICE, ("execute strMethod 6" + request.strMethod).c_str());
-
-    g_rpcSignals.PostCommand(*pcmd);
-
-    syslog(LOG_NOTICE, ("execute strMethod 7" + request.strMethod).c_str());
-}
-
-CRPCTable::CRPCTable()
-{
-    CRPCCommand _help_cmd;
-    _help_cmd.category = "control";
-    _help_cmd.name = "help";
-    _help_cmd.actor = &help_rpc;
-    _help_cmd.okSafeMode = true;
-    _help_cmd.argNames = {"command"};
-    appendCommand(_help_cmd.name, &_help_cmd);
-
-    CRPCCommand _exe_ivmc_cmd;
-    _exe_ivmc_cmd.category = "ivmc";
-    _exe_ivmc_cmd.name = "executeivmc";
-    _exe_ivmc_cmd.actor = &exe_ivmc_rpc;
-    _exe_ivmc_cmd.okSafeMode = true;
-    _exe_ivmc_cmd.argNames = {"vm_config", "code", "input", "storage"};
-    appendCommand(_exe_ivmc_cmd.name, &_exe_ivmc_cmd);
 }
 
 namespace
