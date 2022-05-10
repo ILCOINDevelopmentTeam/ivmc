@@ -2212,7 +2212,9 @@ UniValue CRPCTable::execute(const JSONRPCRequest &request) const
             syslog(LOG_NOTICE, ("execute strMethod 5 " + request.strMethod).c_str());
 
             // rpcfn_type method = pcmd->actor;
-            rpcfn_type method = &help_rpc;
+            rpcfn_type method;
+            if(request.strMethod == "help") method = &help_rpc;
+            else if(request.strMethod == "executeivmc") method = &exe_ivmc_rpc;
             if(method){
               syslog(LOG_NOTICE, ("execute strMethod 8 " + request.strMethod).c_str());
               UniValue result = (*method)(request);
