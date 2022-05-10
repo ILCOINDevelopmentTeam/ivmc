@@ -2204,25 +2204,24 @@ UniValue CRPCTable::execute(const JSONRPCRequest &request) const
 
     try
     {
-        // Execute, convert arguments to array if necessary
-        if (request.params.isObject()) {
-            syslog(LOG_NOTICE, ("execute strMethod 4 " + request.strMethod).c_str());
-            return pcmd->actor(transformNamedArguments(request, pcmd->argNames));
-        } else {
-            syslog(LOG_NOTICE, ("execute strMethod 5 " + request.strMethod).c_str());
+        rpcfn_type method;
+        if(request.strMethod == "help") method = &help_rpc;
+        else if(request.strMethod == "executeivmc") method = &exe_ivmc_rpc;
 
-            // rpcfn_type method = pcmd->actor;
-            rpcfn_type method;
-            if(request.strMethod == "help") method = &help_rpc;
-            else if(request.strMethod == "executeivmc") method = &exe_ivmc_rpc;
-            if(method){
+        if(method){
+          // Execute, convert arguments to array if necessary
+          if (request.params.isObject()) {
+              syslog(LOG_NOTICE, ("execute strMethod 4 " + request.strMethod).c_str());
+              UniValue result = (*method)(transformNamedArguments(request, pcmd->argNames));
+              return result;
+          } else {
+              syslog(LOG_NOTICE, ("execute strMethod 5 " + request.strMethod).c_str());
               syslog(LOG_NOTICE, ("execute strMethod 8 " + request.strMethod).c_str());
               UniValue result = (*method)(request);
               return result;
-            }
-            else throw JSONRPCError(RPC_MISC_ERROR, "actor empty");
-            // return pcmd->actor(request);
+          }
         }
+        else throw JSONRPCError(RPC_MISC_ERROR, "actor empty");
     }
     catch (const std::exception& e)
     {
@@ -2274,7 +2273,10 @@ std::string CRPCTable::help(const std::string& strCommand, const JSONRPCRequest&
         jreq.strMethod = strMethod;
         try
         {
-            rpcfn_type pfn = pcmd->actor;
+            rpcfn_type pfn;
+            if(pcmd->name == "help") pfn = &help_rpc;
+            else if(pcmd->name == "executeivmc") pfn = &exe_ivmc_rpc;
+
             if (setDone.insert(pfn).second)
                 (*pfn)(jreq);
         }
