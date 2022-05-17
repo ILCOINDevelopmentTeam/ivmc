@@ -2611,6 +2611,89 @@ void StopHTTPRPC()
     }
 }
 
+// ------------------------------- FILE
+FILE* OpenDiskFile(const CDiskBlockPos &pos, const char *prefix, bool fReadOnly)
+{
+    if (pos.IsNull())
+        return NULL;
+    boost::filesystem::path path = GetBlockPosFilename(pos, prefix);
+    boost::filesystem::create_directories(path.parent_path());
+    FILE* file = fopen(path.string().c_str(), "rb+");
+    if (!file && !fReadOnly)
+        file = fopen(path.string().c_str(), "wb+");
+    if (!file) {
+        syslog(LOG_NOTICE, strprintf("Unable to open file %s\n", path.string()).c_str());
+        return NULL;
+    }
+    if (pos.nPos) {
+        if (fseek(file, pos.nPos, SEEK_SET)) {
+            syslog(LOG_NOTICE, strprintf("Unable to seek to position %u of %s\n", pos.nPos, path.string()).c_str());
+            fclose(file);
+            return NULL;
+        }
+    }
+    return file;
+}
+
+boost::filesystem::path GetDefaultDataDir()
+{
+    namespace fs = boost::filesystem;
+    // Windows < Vista: C:\Documents and Settings\Username\Application Data\Ilcoin
+    // Windows >= Vista: C:\Users\Username\AppData\Roaming\Ilcoin
+    // Mac: ~/Library/Application Support/Ilcoin
+    // Unix: ~/.ilcoin
+    fs::path pathRet;
+    char* pszHome = getenv("HOME");
+    if (pszHome == NULL || strlen(pszHome) == 0)
+        pathRet = fs::path("/");
+    else pathRet = fs::path(pszHome);
+    return pathRet / ".ivmcd";
+}
+
+static boost::filesystem::path pathCached;
+static boost::filesystem::path pathCachedNetSpecific;
+static CCriticalSection csPathCached;
+const boost::filesystem::path &GetDataDir(bool fNetSpecific)
+{
+    namespace fs = boost::filesystem;
+
+    LOCK(csPathCached);
+
+    fs::path &path = fNetSpecific ? pathCachedNetSpecific : pathCached;
+
+    // This can be called during exceptions by LogPrintf(), so we cache the
+    // value so we don't have to do memory allocations after that.
+    if (!path.empty())
+        return path;
+
+    // if (IsArgSet("-datadir")) {
+    //     path = fs::system_complete(GetArg("-datadir", ""));
+    //     if (!fs::is_directory(path)) {
+    //         path = "";
+    //         return path;
+    //     }
+    // } else {
+        path = GetDefaultDataDir();
+    // }
+
+    fs::create_directories(path);
+
+    return path;
+}
+
+FILE* OpenBlockFile(const CDiskBlockPos &pos, bool fReadOnly) {
+    return OpenDiskFile(pos, "blk", fReadOnly);
+}
+
+FILE* OpenUndoFile(const CDiskBlockPos &pos, bool fReadOnly) {
+    return OpenDiskFile(pos, "rev", fReadOnly);
+}
+
+boost::filesystem::path GetBlockPosFilename(const CDiskBlockPos &pos, const char *prefix)
+{
+    return GetDataDir() / "blocks" / strprintf("%s%05u.dat", prefix, pos.nFile);
+}
+
 namespace
 {
   void do_heartbeat(int count)

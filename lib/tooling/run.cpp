@@ -366,14 +366,6 @@ int run2(ivmc::VM& vm,
       std::string key_string7 = convert7.str();
       std::string full_address_storage = key_string7;
 
-      // Write Index ordered from vector in index.dat file
-
-      // End
-
-      // Write the data where index points in storage.dat file
-
-      // End
-
       // Storage
       int c = 0;
       auto it = recipient_account.storage.begin();
@@ -401,6 +393,14 @@ int run2(ivmc::VM& vm,
 
       out << "Storage:   " << full_address_storage << "\n";
       syslog(LOG_NOTICE, ("Storage: " + full_address_storage).c_str());
+
+      // Write Index ordered from vector in index.dat file
+
+      // End
+
+      // Write the data where index points in storage.dat file
+
+      // End
     }
 
     return 0;

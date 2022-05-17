@@ -4,9 +4,9 @@
 #ifndef ILCOIN_COMPAT_BYTESWAP_H
 #define ILCOIN_COMPAT_BYTESWAP_H
 
-#if defined(HAVE_CONFIG_H)
+// #if defined(HAVE_CONFIG_H)
 #include "config/ilcoin-config.h"
-#endif
+// #endif
 
 #include <stdint.h>
 
