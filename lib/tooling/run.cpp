@@ -281,10 +281,17 @@ int run2(ivmc::VM& vm,
     msg.recipient = create_address;
     msg.sender = create_address;
 
-    syslog(LOG_NOTICE, ("run: " + code_hex).c_str());
-    syslog(LOG_NOTICE, ("run: " + input_hex).c_str());
-    syslog(LOG_NOTICE, ("run: " + storage_hex).c_str());
+    syslog(LOG_NOTICE, ("Code: " + code_hex).c_str());
+    syslog(LOG_NOTICE, ("Input: " + input_hex).c_str());
+    syslog(LOG_NOTICE, ("Storage: " + storage_hex).c_str());
 
+    // Read Index ordered from vector.
+
+    // End
+
+    // Read the data where index points and load it into host.
+
+    // End
     std::string full_address_storage_tmp = storage_hex;
 
     int pos_str = 0;
@@ -336,10 +343,13 @@ int run2(ivmc::VM& vm,
     const auto gas_used = msg.gas - result.gas_left;
     out << "Result:   " << result.status_code << "\nGas used: " << gas_used << "\n";
 
-    if (result.status_code == IVMC_SUCCESS || result.status_code == IVMC_REVERT)
-        out << "Output:   " << hex({result.output_data, result.output_size}) << "\n";
+    syslog(LOG_NOTICE, ("Result: " + std::to_string(result.status_code)).c_str());
+    syslog(LOG_NOTICE, ("Gas used: " + std::to_string(gas_used)).c_str());
 
-    syslog(LOG_NOTICE, ("run: " + hex({result.output_data, result.output_size})).c_str());
+    if (result.status_code == IVMC_SUCCESS || result.status_code == IVMC_REVERT){
+      out << "Output:   " << hex({result.output_data, result.output_size}) << "\n";
+      syslog(LOG_NOTICE, ("Output: " + hex({result.output_data, result.output_size})).c_str());
+    }
 
     if(host2.account_exists(msg.recipient)){
 
@@ -355,6 +365,14 @@ int run2(ivmc::VM& vm,
       }
       std::string key_string7 = convert7.str();
       std::string full_address_storage = key_string7;
+
+      // Write Index ordered from vector in index.dat file
+
+      // End
+
+      // Write the data where index points in storage.dat file
+
+      // End
 
       // Storage
       int c = 0;
@@ -382,7 +400,7 @@ int run2(ivmc::VM& vm,
       }
 
       out << "Storage:   " << full_address_storage << "\n";
-      syslog(LOG_NOTICE, ("run: " + full_address_storage).c_str());
+      syslog(LOG_NOTICE, ("Storage: " + full_address_storage).c_str());
     }
 
     return 0;
