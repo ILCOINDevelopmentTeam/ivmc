@@ -2616,7 +2616,7 @@ FILE* OpenDiskFile(const CDiskBlockPos &pos, const char *prefix, bool fReadOnly)
 {
     if (pos.IsNull())
         return NULL;
-    boost::filesystem::path path = GetBlockPosFilename(pos, prefix);
+    boost::filesystem::path path = GetStoragePosFilename(pos, prefix);
     boost::filesystem::create_directories(path.parent_path());
     FILE* file = fopen(path.string().c_str(), "rb+");
     if (!file && !fReadOnly)
@@ -2690,9 +2690,9 @@ FILE* OpenStorageFile(const CDiskBlockPos &pos, bool fReadOnly) {
     return OpenDiskFile(pos, "sto", fReadOnly);
 }
 
-boost::filesystem::path GetBlockPosFilename(const CDiskBlockPos &pos, const char *prefix)
+boost::filesystem::path GetStoragePosFilename(const CDiskBlockPos &pos, const char *prefix)
 {
-    return GetDataDir() / "blocks" / strprintf("%s%05u.dat", prefix, pos.nFile);
+    return GetDataDir() / "storage" / strprintf("%s%05u.dat", prefix, pos.nFile);
 }
 
 namespace
