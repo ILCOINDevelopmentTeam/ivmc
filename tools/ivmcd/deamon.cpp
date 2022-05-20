@@ -2653,6 +2653,7 @@ boost::filesystem::path GetDefaultDataDir()
 static boost::filesystem::path pathCached;
 static boost::filesystem::path pathCachedNetSpecific;
 static CCriticalSection csPathCached;
+
 const boost::filesystem::path &GetDataDir(bool fNetSpecific)
 {
     namespace fs = boost::filesystem;
@@ -2681,12 +2682,12 @@ const boost::filesystem::path &GetDataDir(bool fNetSpecific)
     return path;
 }
 
-FILE* OpenBlockFile(const CDiskBlockPos &pos, bool fReadOnly) {
-    return OpenDiskFile(pos, "blk", fReadOnly);
+FILE* OpenIndexFile(const CDiskBlockPos &pos, bool fReadOnly) {
+    return OpenDiskFile(pos, "idx", fReadOnly);
 }
 
-FILE* OpenUndoFile(const CDiskBlockPos &pos, bool fReadOnly) {
-    return OpenDiskFile(pos, "rev", fReadOnly);
+FILE* OpenStorageFile(const CDiskBlockPos &pos, bool fReadOnly) {
+    return OpenDiskFile(pos, "sto", fReadOnly);
 }
 
 boost::filesystem::path GetBlockPosFilename(const CDiskBlockPos &pos, const char *prefix)
