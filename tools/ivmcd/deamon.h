@@ -33,6 +33,7 @@
 
 #include "tinyformat.h"
 #include "serialize.h"
+#include "clientversion.h"
 
 static const int DEFAULT_HTTP_THREADS        = 4;
 static const int DEFAULT_HTTP_WORKQUEUE      = 16;
@@ -1194,4 +1195,4 @@ struct CDiskBlockPos
 };
 
 const boost::filesystem::path &GetDataDir(bool fNetSpecific = true);
-boost::filesystem::path GetBlockPosFilename(const CDiskBlockPos &pos, const char *prefix);
+boost::filesystem::path GetStoragePosFilename(const CDiskBlockPos &pos, const char *prefix);

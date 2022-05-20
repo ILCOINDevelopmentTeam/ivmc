@@ -2061,9 +2061,12 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
         ss << std::cout.rdbuf();
         std::string myString = ss.str();
 
-        syslog(LOG_NOTICE, myString.c_str());
-
+        syslog(LOG_NOTICE, ("ivmc: " + myString).c_str());
         syslog(LOG_NOTICE, "ivmc: End execution");
+
+        CDiskBlockPos pos(0, ::GetSerializeSize(myString, SER_DISK, CLIENT_VERSION));
+        std::vector<std::pair<address, CDiskBlockPos> > vPos;
+        // vPos.reserve(1);
 
         return 0;
     }
