@@ -5,6 +5,8 @@
 #ifndef ILCOIN_SERIALIZE_H
 #define ILCOIN_SERIALIZE_H
 
+#include <ivmc/ivmc.hpp>
+
 #include "endian.h"
 
 #include <algorithm>
@@ -79,6 +81,11 @@ template<typename Stream> inline void ser_writedata32(Stream &s, uint32_t obj)
 template<typename Stream> inline void ser_writedata64(Stream &s, uint64_t obj)
 {
     obj = htole64(obj);
+    s.write((char*)&obj, 8);
+}
+template<typename Stream> inline void ser_writedataaddress(Stream &s, ivmc::address obj)
+{
+    obj = obj;
     s.write((char*)&obj, 8);
 }
 template<typename Stream> inline uint8_t ser_readdata8(Stream &s)
@@ -177,6 +184,7 @@ template<typename Stream> inline void Serialize(Stream& s, int64_t a ) { ser_wri
 template<typename Stream> inline void Serialize(Stream& s, uint64_t a) { ser_writedata64(s, a); }
 template<typename Stream> inline void Serialize(Stream& s, float a   ) { ser_writedata32(s, ser_float_to_uint32(a)); }
 template<typename Stream> inline void Serialize(Stream& s, double a  ) { ser_writedata64(s, ser_double_to_uint64(a)); }
+template<typename Stream> inline void Serialize(Stream& s, ivmc::address a) { ser_writedataaddress(s, a); }
 
 template<typename Stream> inline void Unserialize(Stream& s, char& a    ) { a = ser_readdata8(s); } // TODO Get rid of bare char
 template<typename Stream> inline void Unserialize(Stream& s, int8_t& a  ) { a = ser_readdata8(s); }

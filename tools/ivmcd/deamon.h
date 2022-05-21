@@ -35,6 +35,9 @@
 #include "serialize.h"
 #include "clientversion.h"
 
+#include "chain.h"
+#include "txdb.h"
+
 static const int DEFAULT_HTTP_THREADS        = 4;
 static const int DEFAULT_HTTP_WORKQUEUE      = 16;
 static const int DEFAULT_HTTP_SERVER_TIMEOUT = 30;
@@ -1154,45 +1157,4 @@ typedef CMutexLock<CCriticalSection> CCriticalBlock;
 #endif // ILCOIN_HTTPSERVER_H
 
 // ------------------------------- FILE
-struct CDiskBlockPos
-{
-    int nFile;
-    unsigned int nPos;
-
-    ADD_SERIALIZE_METHODS;
-
-    template <typename Stream, typename Operation>
-    inline void SerializationOp(Stream& s, Operation ser_action) {
-        READWRITE(VARINT(nFile));
-        READWRITE(VARINT(nPos));
-    }
-
-    CDiskBlockPos() {
-        SetNull();
-    }
-
-    CDiskBlockPos(int nFileIn, unsigned int nPosIn) {
-        nFile = nFileIn;
-        nPos = nPosIn;
-    }
-
-    friend bool operator==(const CDiskBlockPos &a, const CDiskBlockPos &b) {
-        return (a.nFile == b.nFile && a.nPos == b.nPos);
-    }
-
-    friend bool operator!=(const CDiskBlockPos &a, const CDiskBlockPos &b) {
-        return !(a == b);
-    }
-
-    void SetNull() { nFile = -1; nPos = 0; }
-    bool IsNull() const { return (nFile == -1); }
-
-    std::string ToString() const
-    {
-        return strprintf("CBlockDiskPos(nFile=%i, nPos=%i)", nFile, nPos);
-    }
-
-};
-
-const boost::filesystem::path &GetDataDir(bool fNetSpecific = true);
 boost::filesystem::path GetStoragePosFilename(const CDiskBlockPos &pos, const char *prefix);
