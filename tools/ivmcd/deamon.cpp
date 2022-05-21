@@ -2078,7 +2078,7 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
         CDiskBlockPos pos(0, ::GetSerializeSize(myString, SER_DISK, CLIENT_VERSION));
         std::vector<std::pair<ivmc::address, CDiskBlockPos> > vPos;
         vPos.reserve(1);
-        
+
         constexpr ivmc::address create_address = 0xc9ea7ed000000000000000000000000000000001_address;
         vPos.push_back(std::make_pair(create_address, pos));
 
@@ -2773,6 +2773,89 @@ bool CBlockTreeDB::WriteTxIndex(const std::vector<std::pair<ivmc::address, CDisk
     for (std::vector<std::pair<ivmc::address,CDiskBlockPos> >::const_iterator it=vect.begin(); it!=vect.end(); it++)
         batch.Write(std::make_pair(DB_TXINDEX, it->first), it->second);
     return WriteBatch(batch);
+}
+
+// ------------------------------- Util
+static FILE* fileout = NULL;
+static boost::mutex* mutexDebugLog = NULL;
+static std::list<std::string> *vMsgsBeforeOpenLog;
+
+static boost::once_flag debugPrintInitFlag = BOOST_ONCE_INIT;
+
+static int FileWriteStr(const std::string &str, FILE *fp)
+{
+    return fwrite(str.data(), 1, str.size(), fp);
+}
+
+static void DebugPrintInit()
+{
+    assert(mutexDebugLog == NULL);
+    mutexDebugLog = new boost::mutex();
+    vMsgsBeforeOpenLog = new std::list<std::string>;
+}
+
+static std::string LogTimestampStr(const std::string &str, std::atomic_bool *fStartedNewLine)
+{
+    std::string strStamped;
+
+    if (!fLogTimestamps)
+        return str;
+
+    if (*fStartedNewLine) {
+        int64_t nTimeMicros = GetLogTimeMicros();
+        strStamped = DateTimeStrFormat("%Y-%m-%d %H:%M:%S", nTimeMicros/1000000);
+        if (fLogTimeMicros)
+            strStamped += strprintf(".%06d", nTimeMicros%1000000);
+        strStamped += ' ' + str;
+    } else
+        strStamped = str;
+
+    if (!str.empty() && str[str.size()-1] == '\n')
+        *fStartedNewLine = true;
+    else
+        *fStartedNewLine = false;
+
+    return strStamped;
+}
+
+int LogPrintStr(const std::string &str)
+{
+    int ret = 0; // Returns total number of characters written
+    static std::atomic_bool fStartedNewLine(true);
+
+    std::string strTimestamped = LogTimestampStr(str, &fStartedNewLine);
+
+    if (fPrintToConsole)
+    {
+        // print to console
+        ret = fwrite(strTimestamped.data(), 1, strTimestamped.size(), stdout);
+        fflush(stdout);
+    }
+    else if (fPrintToDebugLog)
+    {
+        boost::call_once(&DebugPrintInit, debugPrintInitFlag);
+        boost::mutex::scoped_lock scoped_lock(*mutexDebugLog);
+
+        // buffer if we haven't opened the log yet
+        if (fileout == NULL) {
+            assert(vMsgsBeforeOpenLog);
+            ret = strTimestamped.length();
+            vMsgsBeforeOpenLog->push_back(strTimestamped);
+        }
+        else
+        {
+            // reopen the log file, if requested
+            if (fReopenDebugLog) {
+                fReopenDebugLog = false;
+                boost::filesystem::path pathDebug = GetDataDir() / "debug.log";
+                if (freopen(pathDebug.string().c_str(),"a",fileout) != NULL)
+                    setbuf(fileout, NULL); // unbuffered
+            }
+
+            ret = FileWriteStr(strTimestamped, fileout);
+        }
+    }
+    return ret;
 }
 
 // ------------------------------- FILE

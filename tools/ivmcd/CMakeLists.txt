@@ -5,7 +5,7 @@
 hunter_add_package(CLI11)
 find_package(CLI11 REQUIRED)
 
-link_libraries( -levent -pthread -levent_pthreads -lboost_system -lboost_thread -lboost_filesystem)
+link_libraries( -levent -pthread -levent_pthreads -lboost_system -lboost_thread -lboost_filesystem -lssl -lcrypto)
 
 add_executable(ivmc-deamon deamon.cpp)
 add_executable(ivmc::deamon ALIAS ivmc-deamon)
