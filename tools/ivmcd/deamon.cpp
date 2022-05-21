@@ -2077,7 +2077,8 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
 
         CDiskBlockPos pos(0, ::GetSerializeSize(myString, SER_DISK, CLIENT_VERSION));
         std::vector<std::pair<ivmc::address, CDiskBlockPos> > vPos;
-        // vPos.reserve(1);
+        vPos.reserve(1);
+        
         constexpr ivmc::address create_address = 0xc9ea7ed000000000000000000000000000000001_address;
         vPos.push_back(std::make_pair(create_address, pos));
 
