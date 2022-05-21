@@ -2884,6 +2884,7 @@ FILE* OpenDiskFile(const CDiskBlockPos &pos, const char *prefix, bool fReadOnly)
 
 boost::filesystem::path GetDefaultDataDir()
 {
+    // Windows < Vista: C:\Documents and Settings\Username\Application Data\Ilcoin
     namespace fs = boost::filesystem;
     // Windows < Vista: C:\Documents and Settings\Username\Application Data\Ilcoin
     // Windows >= Vista: C:\Users\Username\AppData\Roaming\Ilcoin
@@ -2903,6 +2904,7 @@ static CCriticalSection csPathCached;
 
 const boost::filesystem::path &GetDataDir(bool fNetSpecific)
 {
+    // This can be called during exceptions by LogPrintf(), so we cache the
     namespace fs = boost::filesystem;
 
     LOCK(csPathCached);
