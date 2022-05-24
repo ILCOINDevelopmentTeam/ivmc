@@ -62,24 +62,39 @@
 #include "leveldb/env.h"
 #include "leveldb/filter_policy.h"
 #include "leveldb/memenv.h"
-
+#include "leveldb/slice.h"
 #include "leveldb/db.h"
+#include "leveldb/options.h"
+#include "leveldb/iterator.h"
 #include "leveldb/db/dbformat.h"
 #include "leveldb/db/memtable.h"
 #include "leveldb/db/write_batch_internal.h"
-#include "leveldb/iterator.h"
 #include "leveldb/util/coding.h"
+#include "leveldb/util/arena.h"
+#include "leveldb/util/logging.h"
+#include "leveldb/util/mutexlock.h"
+#include "leveldb/util/posix_logger.h"
 #include "leveldb/port/port.h"
+#include "leveldb/port/port_posix.h"
 
 #include "random.h"
 #include "compat.h"
 #include "util.h"             // for LogPrint()
+#include "support/cleanse.h"
 
 #include <stdlib.h>
 #include <limits>
 
 #include <openssl/err.h>
 #include <openssl/rand.h>
+#include <openssl/crypto.h>
+#include <assert.h>
+#include <algorithm>
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <sys/mman.h>
+#include <sys/time.h>
 
 // --------------------------------- StartHTTPServer
 /** HTTP request work item */
@@ -3233,6 +3248,1113 @@ LookupKey::LookupKey(const Slice& user_key, SequenceNumber s) {
 }
 
 }  // namespace leveldb
+
+namespace leveldb {
+
+static const int kBlockSize = 4096;
+
+Arena::Arena() : memory_usage_(0) {
+  alloc_ptr_ = NULL;  // First allocation will allocate a block
+  alloc_bytes_remaining_ = 0;
+}
+
+Arena::~Arena() {
+  for (size_t i = 0; i < blocks_.size(); i++) {
+    delete[] blocks_[i];
+  }
+}
+
+char* Arena::AllocateFallback(size_t bytes) {
+  if (bytes > kBlockSize / 4) {
+    // Object is more than a quarter of our block size.  Allocate it separately
+    // to avoid wasting too much space in leftover bytes.
+    char* result = AllocateNewBlock(bytes);
+    return result;
+  }
+
+  // We waste the remaining space in the current block.
+  alloc_ptr_ = AllocateNewBlock(kBlockSize);
+  alloc_bytes_remaining_ = kBlockSize;
+
+  char* result = alloc_ptr_;
+  alloc_ptr_ += bytes;
+  alloc_bytes_remaining_ -= bytes;
+  return result;
+}
+
+char* Arena::AllocateAligned(size_t bytes) {
+  const int align = (sizeof(void*) > 8) ? sizeof(void*) : 8;
+  assert((align & (align-1)) == 0);   // Pointer size should be a power of 2
+  size_t current_mod = reinterpret_cast<uintptr_t>(alloc_ptr_) & (align-1);
+  size_t slop = (current_mod == 0 ? 0 : align - current_mod);
+  size_t needed = bytes + slop;
+  char* result;
+  if (needed <= alloc_bytes_remaining_) {
+    result = alloc_ptr_ + slop;
+    alloc_ptr_ += needed;
+    alloc_bytes_remaining_ -= needed;
+  } else {
+    // AllocateFallback always returned aligned memory
+    result = AllocateFallback(bytes);
+  }
+  assert((reinterpret_cast<uintptr_t>(result) & (align-1)) == 0);
+  return result;
+}
+
+char* Arena::AllocateNewBlock(size_t block_bytes) {
+  char* result = new char[block_bytes];
+  blocks_.push_back(result);
+  memory_usage_.NoBarrier_Store(
+      reinterpret_cast<void*>(MemoryUsage() + block_bytes + sizeof(char*)));
+  return result;
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+Comparator::~Comparator() { }
+
+namespace {
+class BytewiseComparatorImpl : public Comparator {
+ public:
+  BytewiseComparatorImpl() { }
+
+  virtual const char* Name() const {
+    return "leveldb.BytewiseComparator";
+  }
+
+  virtual int Compare(const Slice& a, const Slice& b) const {
+    return a.compare(b);
+  }
+
+  virtual void FindShortestSeparator(
+      std::string* start,
+      const Slice& limit) const {
+    // Find length of common prefix
+    size_t min_length = std::min(start->size(), limit.size());
+    size_t diff_index = 0;
+    while ((diff_index < min_length) &&
+           ((*start)[diff_index] == limit[diff_index])) {
+      diff_index++;
+    }
+
+    if (diff_index >= min_length) {
+      // Do not shorten if one string is a prefix of the other
+    } else {
+      uint8_t diff_byte = static_cast<uint8_t>((*start)[diff_index]);
+      if (diff_byte < static_cast<uint8_t>(0xff) &&
+          diff_byte + 1 < static_cast<uint8_t>(limit[diff_index])) {
+        (*start)[diff_index]++;
+        start->resize(diff_index + 1);
+        assert(Compare(*start, limit) < 0);
+      }
+    }
+  }
+
+  virtual void FindShortSuccessor(std::string* key) const {
+    // Find first character that can be incremented
+    size_t n = key->size();
+    for (size_t i = 0; i < n; i++) {
+      const uint8_t byte = (*key)[i];
+      if (byte != static_cast<uint8_t>(0xff)) {
+        (*key)[i] = byte + 1;
+        key->resize(i+1);
+        return;
+      }
+    }
+    // *key is a run of 0xffs.  Leave it alone.
+  }
+};
+}  // namespace
+
+static port::OnceType once = LEVELDB_ONCE_INIT;
+static const Comparator* bytewise;
+
+static void InitModule() {
+  bytewise = new BytewiseComparatorImpl;
+}
+
+const Comparator* BytewiseComparator() {
+  port::InitOnce(&once, InitModule);
+  return bytewise;
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+void EncodeFixed32(char* buf, uint32_t value) {
+  if (port::kLittleEndian) {
+    memcpy(buf, &value, sizeof(value));
+  } else {
+    buf[0] = value & 0xff;
+    buf[1] = (value >> 8) & 0xff;
+    buf[2] = (value >> 16) & 0xff;
+    buf[3] = (value >> 24) & 0xff;
+  }
+}
+
+void EncodeFixed64(char* buf, uint64_t value) {
+  if (port::kLittleEndian) {
+    memcpy(buf, &value, sizeof(value));
+  } else {
+    buf[0] = value & 0xff;
+    buf[1] = (value >> 8) & 0xff;
+    buf[2] = (value >> 16) & 0xff;
+    buf[3] = (value >> 24) & 0xff;
+    buf[4] = (value >> 32) & 0xff;
+    buf[5] = (value >> 40) & 0xff;
+    buf[6] = (value >> 48) & 0xff;
+    buf[7] = (value >> 56) & 0xff;
+  }
+}
+
+void PutFixed32(std::string* dst, uint32_t value) {
+  char buf[sizeof(value)];
+  EncodeFixed32(buf, value);
+  dst->append(buf, sizeof(buf));
+}
+
+void PutFixed64(std::string* dst, uint64_t value) {
+  char buf[sizeof(value)];
+  EncodeFixed64(buf, value);
+  dst->append(buf, sizeof(buf));
+}
+
+char* EncodeVarint32(char* dst, uint32_t v) {
+  // Operate on characters as unsigneds
+  unsigned char* ptr = reinterpret_cast<unsigned char*>(dst);
+  static const int B = 128;
+  if (v < (1<<7)) {
+    *(ptr++) = v;
+  } else if (v < (1<<14)) {
+    *(ptr++) = v | B;
+    *(ptr++) = v>>7;
+  } else if (v < (1<<21)) {
+    *(ptr++) = v | B;
+    *(ptr++) = (v>>7) | B;
+    *(ptr++) = v>>14;
+  } else if (v < (1<<28)) {
+    *(ptr++) = v | B;
+    *(ptr++) = (v>>7) | B;
+    *(ptr++) = (v>>14) | B;
+    *(ptr++) = v>>21;
+  } else {
+    *(ptr++) = v | B;
+    *(ptr++) = (v>>7) | B;
+    *(ptr++) = (v>>14) | B;
+    *(ptr++) = (v>>21) | B;
+    *(ptr++) = v>>28;
+  }
+  return reinterpret_cast<char*>(ptr);
+}
+
+void PutVarint32(std::string* dst, uint32_t v) {
+  char buf[5];
+  char* ptr = EncodeVarint32(buf, v);
+  dst->append(buf, ptr - buf);
+}
+
+char* EncodeVarint64(char* dst, uint64_t v) {
+  static const int B = 128;
+  unsigned char* ptr = reinterpret_cast<unsigned char*>(dst);
+  while (v >= B) {
+    *(ptr++) = (v & (B-1)) | B;
+    v >>= 7;
+  }
+  *(ptr++) = static_cast<unsigned char>(v);
+  return reinterpret_cast<char*>(ptr);
+}
+
+void PutVarint64(std::string* dst, uint64_t v) {
+  char buf[10];
+  char* ptr = EncodeVarint64(buf, v);
+  dst->append(buf, ptr - buf);
+}
+
+void PutLengthPrefixedSlice(std::string* dst, const Slice& value) {
+  PutVarint32(dst, value.size());
+  dst->append(value.data(), value.size());
+}
+
+int VarintLength(uint64_t v) {
+  int len = 1;
+  while (v >= 128) {
+    v >>= 7;
+    len++;
+  }
+  return len;
+}
+
+const char* GetVarint32PtrFallback(const char* p,
+                                   const char* limit,
+                                   uint32_t* value) {
+  uint32_t result = 0;
+  for (uint32_t shift = 0; shift <= 28 && p < limit; shift += 7) {
+    uint32_t byte = *(reinterpret_cast<const unsigned char*>(p));
+    p++;
+    if (byte & 128) {
+      // More bytes are present
+      result |= ((byte & 127) << shift);
+    } else {
+      result |= (byte << shift);
+      *value = result;
+      return reinterpret_cast<const char*>(p);
+    }
+  }
+  return NULL;
+}
+
+bool GetVarint32(Slice* input, uint32_t* value) {
+  const char* p = input->data();
+  const char* limit = p + input->size();
+  const char* q = GetVarint32Ptr(p, limit, value);
+  if (q == NULL) {
+    return false;
+  } else {
+    *input = Slice(q, limit - q);
+    return true;
+  }
+}
+
+const char* GetVarint64Ptr(const char* p, const char* limit, uint64_t* value) {
+  uint64_t result = 0;
+  for (uint32_t shift = 0; shift <= 63 && p < limit; shift += 7) {
+    uint64_t byte = *(reinterpret_cast<const unsigned char*>(p));
+    p++;
+    if (byte & 128) {
+      // More bytes are present
+      result |= ((byte & 127) << shift);
+    } else {
+      result |= (byte << shift);
+      *value = result;
+      return reinterpret_cast<const char*>(p);
+    }
+  }
+  return NULL;
+}
+
+bool GetVarint64(Slice* input, uint64_t* value) {
+  const char* p = input->data();
+  const char* limit = p + input->size();
+  const char* q = GetVarint64Ptr(p, limit, value);
+  if (q == NULL) {
+    return false;
+  } else {
+    *input = Slice(q, limit - q);
+    return true;
+  }
+}
+
+const char* GetLengthPrefixedSlice(const char* p, const char* limit,
+                                   Slice* result) {
+  uint32_t len;
+  p = GetVarint32Ptr(p, limit, &len);
+  if (p == NULL) return NULL;
+  if (p + len > limit) return NULL;
+  *result = Slice(p, len);
+  return p + len;
+}
+
+bool GetLengthPrefixedSlice(Slice* input, Slice* result) {
+  uint32_t len;
+  if (GetVarint32(input, &len) &&
+      input->size() >= len) {
+    *result = Slice(input->data(), len);
+    input->remove_prefix(len);
+    return true;
+  } else {
+    return false;
+  }
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+Iterator::Iterator() {
+  cleanup_.function = NULL;
+  cleanup_.next = NULL;
+}
+
+Iterator::~Iterator() {
+  if (cleanup_.function != NULL) {
+    (*cleanup_.function)(cleanup_.arg1, cleanup_.arg2);
+    for (Cleanup* c = cleanup_.next; c != NULL; ) {
+      (*c->function)(c->arg1, c->arg2);
+      Cleanup* next = c->next;
+      delete c;
+      c = next;
+    }
+  }
+}
+
+void Iterator::RegisterCleanup(CleanupFunction func, void* arg1, void* arg2) {
+  assert(func != NULL);
+  Cleanup* c;
+  if (cleanup_.function == NULL) {
+    c = &cleanup_;
+  } else {
+    c = new Cleanup;
+    c->next = cleanup_.next;
+    cleanup_.next = c;
+  }
+  c->function = func;
+  c->arg1 = arg1;
+  c->arg2 = arg2;
+}
+
+namespace {
+class EmptyIterator : public Iterator {
+ public:
+  EmptyIterator(const Status& s) : status_(s) { }
+  virtual bool Valid() const { return false; }
+  virtual void Seek(const Slice& target) { }
+  virtual void SeekToFirst() { }
+  virtual void SeekToLast() { }
+  virtual void Next() { assert(false); }
+  virtual void Prev() { assert(false); }
+  Slice key() const { assert(false); return Slice(); }
+  Slice value() const { assert(false); return Slice(); }
+  virtual Status status() const { return status_; }
+ private:
+  Status status_;
+};
+}  // namespace
+
+Iterator* NewEmptyIterator() {
+  return new EmptyIterator(Status::OK());
+}
+
+Iterator* NewErrorIterator(const Status& status) {
+  return new EmptyIterator(status);
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+namespace port {
+
+static void PthreadCall(const char* label, int result) {
+  if (result != 0) {
+    fprintf(stderr, "pthread %s: %s\n", label, strerror(result));
+    abort();
+  }
+}
+
+Mutex::Mutex() { PthreadCall("init mutex", pthread_mutex_init(&mu_, NULL)); }
+
+Mutex::~Mutex() { PthreadCall("destroy mutex", pthread_mutex_destroy(&mu_)); }
+
+void Mutex::Lock() { PthreadCall("lock", pthread_mutex_lock(&mu_)); }
+
+void Mutex::Unlock() { PthreadCall("unlock", pthread_mutex_unlock(&mu_)); }
+
+CondVar::CondVar(Mutex* mu)
+    : mu_(mu) {
+    PthreadCall("init cv", pthread_cond_init(&cv_, NULL));
+}
+
+CondVar::~CondVar() { PthreadCall("destroy cv", pthread_cond_destroy(&cv_)); }
+
+void CondVar::Wait() {
+  PthreadCall("wait", pthread_cond_wait(&cv_, &mu_->mu_));
+}
+
+void CondVar::Signal() {
+  PthreadCall("signal", pthread_cond_signal(&cv_));
+}
+
+void CondVar::SignalAll() {
+  PthreadCall("broadcast", pthread_cond_broadcast(&cv_));
+}
+
+void InitOnce(OnceType* once, void (*initializer)()) {
+  PthreadCall("once", pthread_once(once, initializer));
+}
+
+}  // namespace port
+}  // namespace leveldb
+
+namespace leveldb {
+
+void AppendNumberTo(std::string* str, uint64_t num) {
+  char buf[30];
+  snprintf(buf, sizeof(buf), "%llu", (unsigned long long) num);
+  str->append(buf);
+}
+
+void AppendEscapedStringTo(std::string* str, const Slice& value) {
+  for (size_t i = 0; i < value.size(); i++) {
+    char c = value[i];
+    if (c >= ' ' && c <= '~') {
+      str->push_back(c);
+    } else {
+      char buf[10];
+      snprintf(buf, sizeof(buf), "\\x%02x",
+               static_cast<unsigned int>(c) & 0xff);
+      str->append(buf);
+    }
+  }
+}
+
+std::string NumberToString(uint64_t num) {
+  std::string r;
+  AppendNumberTo(&r, num);
+  return r;
+}
+
+std::string EscapeString(const Slice& value) {
+  std::string r;
+  AppendEscapedStringTo(&r, value);
+  return r;
+}
+
+bool ConsumeDecimalNumber(Slice* in, uint64_t* val) {
+  uint64_t v = 0;
+  int digits = 0;
+  while (!in->empty()) {
+    char c = (*in)[0];
+    if (c >= '0' && c <= '9') {
+      ++digits;
+      const int delta = (c - '0');
+      static const uint64_t kMaxUint64 = ~static_cast<uint64_t>(0);
+      if (v > kMaxUint64/10 ||
+          (v == kMaxUint64/10 && delta > kMaxUint64%10)) {
+        // Overflow
+        return false;
+      }
+      v = (v * 10) + delta;
+      in->remove_prefix(1);
+    } else {
+      break;
+    }
+  }
+  *val = v;
+  return (digits > 0);
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+Options::Options()
+    : comparator(BytewiseComparator()),
+      create_if_missing(false),
+      error_if_exists(false),
+      paranoid_checks(false),
+      env(Env::Default()),
+      info_log(NULL),
+      write_buffer_size(4<<20),
+      max_open_files(1000),
+      block_cache(NULL),
+      block_size(4096),
+      block_restart_interval(16),
+      compression(kSnappyCompression),
+      reuse_logs(false),
+      filter_policy(NULL) {
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+namespace {
+
+static Status IOError(const std::string& context, int err_number) {
+  return Status::IOError(context, strerror(err_number));
+}
+
+class PosixSequentialFile: public SequentialFile {
+ private:
+  std::string filename_;
+  FILE* file_;
+
+ public:
+  PosixSequentialFile(const std::string& fname, FILE* f)
+      : filename_(fname), file_(f) { }
+  virtual ~PosixSequentialFile() { fclose(file_); }
+
+  virtual Status Read(size_t n, Slice* result, char* scratch) {
+    Status s;
+    size_t r = fread_unlocked(scratch, 1, n, file_);
+    *result = Slice(scratch, r);
+    if (r < n) {
+      if (feof(file_)) {
+        // We leave status as ok if we hit the end of the file
+      } else {
+        // A partial read with an error: return a non-ok status
+        s = IOError(filename_, errno);
+      }
+    }
+    return s;
+  }
+
+  virtual Status Skip(uint64_t n) {
+    if (fseek(file_, n, SEEK_CUR)) {
+      return IOError(filename_, errno);
+    }
+    return Status::OK();
+  }
+};
+
+// pread() based random-access
+class PosixRandomAccessFile: public RandomAccessFile {
+ private:
+  std::string filename_;
+  int fd_;
+
+ public:
+  PosixRandomAccessFile(const std::string& fname, int fd)
+      : filename_(fname), fd_(fd) { }
+  virtual ~PosixRandomAccessFile() { close(fd_); }
+
+  virtual Status Read(uint64_t offset, size_t n, Slice* result,
+                      char* scratch) const {
+    Status s;
+    ssize_t r = pread(fd_, scratch, n, static_cast<off_t>(offset));
+    *result = Slice(scratch, (r < 0) ? 0 : r);
+    if (r < 0) {
+      // An error: return a non-ok status
+      s = IOError(filename_, errno);
+    }
+    return s;
+  }
+};
+
+// Helper class to limit mmap file usage so that we do not end up
+// running out virtual memory or running into kernel performance
+// problems for very large databases.
+class MmapLimiter {
+ public:
+  // Up to 1000 mmaps for 64-bit binaries; none for smaller pointer sizes.
+  MmapLimiter() {
+    SetAllowed(sizeof(void*) >= 8 ? 1000 : 0);
+  }
+
+  // If another mmap slot is available, acquire it and return true.
+  // Else return false.
+  bool Acquire() {
+    if (GetAllowed() <= 0) {
+      return false;
+    }
+    MutexLock l(&mu_);
+    intptr_t x = GetAllowed();
+    if (x <= 0) {
+      return false;
+    } else {
+      SetAllowed(x - 1);
+      return true;
+    }
+  }
+
+  // Release a slot acquired by a previous call to Acquire() that returned true.
+  void Release() {
+    MutexLock l(&mu_);
+    SetAllowed(GetAllowed() + 1);
+  }
+
+ private:
+  port::Mutex mu_;
+  port::AtomicPointer allowed_;
+
+  intptr_t GetAllowed() const {
+    return reinterpret_cast<intptr_t>(allowed_.Acquire_Load());
+  }
+
+  // REQUIRES: mu_ must be held
+  void SetAllowed(intptr_t v) {
+    allowed_.Release_Store(reinterpret_cast<void*>(v));
+  }
+
+  MmapLimiter(const MmapLimiter&);
+  void operator=(const MmapLimiter&);
+};
+
+// mmap() based random-access
+class PosixMmapReadableFile: public RandomAccessFile {
+ private:
+  std::string filename_;
+  void* mmapped_region_;
+  size_t length_;
+  MmapLimiter* limiter_;
+
+ public:
+  // base[0,length-1] contains the mmapped contents of the file.
+  PosixMmapReadableFile(const std::string& fname, void* base, size_t length,
+                        MmapLimiter* limiter)
+      : filename_(fname), mmapped_region_(base), length_(length),
+        limiter_(limiter) {
+  }
+
+  virtual ~PosixMmapReadableFile() {
+    munmap(mmapped_region_, length_);
+    limiter_->Release();
+  }
+
+  virtual Status Read(uint64_t offset, size_t n, Slice* result,
+                      char* scratch) const {
+    Status s;
+    if (offset + n > length_) {
+      *result = Slice();
+      s = IOError(filename_, EINVAL);
+    } else {
+      *result = Slice(reinterpret_cast<char*>(mmapped_region_) + offset, n);
+    }
+    return s;
+  }
+};
+
+class PosixWritableFile : public WritableFile {
+ private:
+  std::string filename_;
+  FILE* file_;
+
+ public:
+  PosixWritableFile(const std::string& fname, FILE* f)
+      : filename_(fname), file_(f) { }
+
+  ~PosixWritableFile() {
+    if (file_ != NULL) {
+      // Ignoring any potential errors
+      fclose(file_);
+    }
+  }
+
+  virtual Status Append(const Slice& data) {
+    size_t r = fwrite_unlocked(data.data(), 1, data.size(), file_);
+    if (r != data.size()) {
+      return IOError(filename_, errno);
+    }
+    return Status::OK();
+  }
+
+  virtual Status Close() {
+    Status result;
+    if (fclose(file_) != 0) {
+      result = IOError(filename_, errno);
+    }
+    file_ = NULL;
+    return result;
+  }
+
+  virtual Status Flush() {
+    if (fflush_unlocked(file_) != 0) {
+      return IOError(filename_, errno);
+    }
+    return Status::OK();
+  }
+
+  Status SyncDirIfManifest() {
+    const char* f = filename_.c_str();
+    const char* sep = strrchr(f, '/');
+    Slice basename;
+    std::string dir;
+    if (sep == NULL) {
+      dir = ".";
+      basename = f;
+    } else {
+      dir = std::string(f, sep - f);
+      basename = sep + 1;
+    }
+    Status s;
+    if (basename.starts_with("MANIFEST")) {
+      int fd = open(dir.c_str(), O_RDONLY);
+      if (fd < 0) {
+        s = IOError(dir, errno);
+      } else {
+        if (fsync(fd) < 0) {
+          s = IOError(dir, errno);
+        }
+        close(fd);
+      }
+    }
+    return s;
+  }
+
+  virtual Status Sync() {
+    // Ensure new files referred to by the manifest are in the filesystem.
+    Status s = SyncDirIfManifest();
+    if (!s.ok()) {
+      return s;
+    }
+    if (fflush_unlocked(file_) != 0 ||
+        fdatasync(fileno(file_)) != 0) {
+      s = Status::IOError(filename_, strerror(errno));
+    }
+    return s;
+  }
+};
+
+static int LockOrUnlock(int fd, bool lock) {
+  errno = 0;
+  struct flock f;
+  memset(&f, 0, sizeof(f));
+  f.l_type = (lock ? F_WRLCK : F_UNLCK);
+  f.l_whence = SEEK_SET;
+  f.l_start = 0;
+  f.l_len = 0;        // Lock/unlock entire file
+  return fcntl(fd, F_SETLK, &f);
+}
+
+class PosixFileLock : public FileLock {
+ public:
+  int fd_;
+  std::string name_;
+};
+
+// Set of locked files.  We keep a separate set instead of just
+// relying on fcntrl(F_SETLK) since fcntl(F_SETLK) does not provide
+// any protection against multiple uses from the same process.
+class PosixLockTable {
+ private:
+  port::Mutex mu_;
+  std::set<std::string> locked_files_;
+ public:
+  bool Insert(const std::string& fname) {
+    MutexLock l(&mu_);
+    return locked_files_.insert(fname).second;
+  }
+  void Remove(const std::string& fname) {
+    MutexLock l(&mu_);
+    locked_files_.erase(fname);
+  }
+};
+
+class PosixEnv : public Env {
+ public:
+  PosixEnv();
+  virtual ~PosixEnv() {
+    char msg[] = "Destroying Env::Default()\n";
+    fwrite(msg, 1, sizeof(msg), stderr);
+    abort();
+  }
+
+  virtual Status NewSequentialFile(const std::string& fname,
+                                   SequentialFile** result) {
+    FILE* f = fopen(fname.c_str(), "r");
+    if (f == NULL) {
+      *result = NULL;
+      return IOError(fname, errno);
+    } else {
+      *result = new PosixSequentialFile(fname, f);
+      return Status::OK();
+    }
+  }
+
+  virtual Status NewRandomAccessFile(const std::string& fname,
+                                     RandomAccessFile** result) {
+    *result = NULL;
+    Status s;
+    int fd = open(fname.c_str(), O_RDONLY);
+    if (fd < 0) {
+      s = IOError(fname, errno);
+    } else if (mmap_limit_.Acquire()) {
+      uint64_t size;
+      s = GetFileSize(fname, &size);
+      if (s.ok()) {
+        void* base = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+        if (base != MAP_FAILED) {
+          *result = new PosixMmapReadableFile(fname, base, size, &mmap_limit_);
+        } else {
+          s = IOError(fname, errno);
+        }
+      }
+      close(fd);
+      if (!s.ok()) {
+        mmap_limit_.Release();
+      }
+    } else {
+      *result = new PosixRandomAccessFile(fname, fd);
+    }
+    return s;
+  }
+
+  virtual Status NewWritableFile(const std::string& fname,
+                                 WritableFile** result) {
+    Status s;
+    FILE* f = fopen(fname.c_str(), "w");
+    if (f == NULL) {
+      *result = NULL;
+      s = IOError(fname, errno);
+    } else {
+      *result = new PosixWritableFile(fname, f);
+    }
+    return s;
+  }
+
+  virtual Status NewAppendableFile(const std::string& fname,
+                                   WritableFile** result) {
+    Status s;
+    FILE* f = fopen(fname.c_str(), "a");
+    if (f == NULL) {
+      *result = NULL;
+      s = IOError(fname, errno);
+    } else {
+      *result = new PosixWritableFile(fname, f);
+    }
+    return s;
+  }
+
+  virtual bool FileExists(const std::string& fname) {
+    return access(fname.c_str(), F_OK) == 0;
+  }
+
+  virtual Status GetChildren(const std::string& dir,
+                             std::vector<std::string>* result) {
+    result->clear();
+    DIR* d = opendir(dir.c_str());
+    if (d == NULL) {
+      return IOError(dir, errno);
+    }
+    struct dirent* entry;
+    while ((entry = readdir(d)) != NULL) {
+      result->push_back(entry->d_name);
+    }
+    closedir(d);
+    return Status::OK();
+  }
+
+  virtual Status DeleteFile(const std::string& fname) {
+    Status result;
+    if (unlink(fname.c_str()) != 0) {
+      result = IOError(fname, errno);
+    }
+    return result;
+  }
+
+  virtual Status CreateDir(const std::string& name) {
+    Status result;
+    if (mkdir(name.c_str(), 0755) != 0) {
+      result = IOError(name, errno);
+    }
+    return result;
+  }
+
+  virtual Status DeleteDir(const std::string& name) {
+    Status result;
+    if (rmdir(name.c_str()) != 0) {
+      result = IOError(name, errno);
+    }
+    return result;
+  }
+
+  virtual Status GetFileSize(const std::string& fname, uint64_t* size) {
+    Status s;
+    struct stat sbuf;
+    if (stat(fname.c_str(), &sbuf) != 0) {
+      *size = 0;
+      s = IOError(fname, errno);
+    } else {
+      *size = sbuf.st_size;
+    }
+    return s;
+  }
+
+  virtual Status RenameFile(const std::string& src, const std::string& target) {
+    Status result;
+    if (rename(src.c_str(), target.c_str()) != 0) {
+      result = IOError(src, errno);
+    }
+    return result;
+  }
+
+  virtual Status LockFile(const std::string& fname, FileLock** lock) {
+    *lock = NULL;
+    Status result;
+    int fd = open(fname.c_str(), O_RDWR | O_CREAT, 0644);
+    if (fd < 0) {
+      result = IOError(fname, errno);
+    } else if (!locks_.Insert(fname)) {
+      close(fd);
+      result = Status::IOError("lock " + fname, "already held by process");
+    } else if (LockOrUnlock(fd, true) == -1) {
+      result = IOError("lock " + fname, errno);
+      close(fd);
+      locks_.Remove(fname);
+    } else {
+      PosixFileLock* my_lock = new PosixFileLock;
+      my_lock->fd_ = fd;
+      my_lock->name_ = fname;
+      *lock = my_lock;
+    }
+    return result;
+  }
+
+  virtual Status UnlockFile(FileLock* lock) {
+    PosixFileLock* my_lock = reinterpret_cast<PosixFileLock*>(lock);
+    Status result;
+    if (LockOrUnlock(my_lock->fd_, false) == -1) {
+      result = IOError("unlock", errno);
+    }
+    locks_.Remove(my_lock->name_);
+    close(my_lock->fd_);
+    delete my_lock;
+    return result;
+  }
+
+  virtual void Schedule(void (*function)(void*), void* arg);
+
+  virtual void StartThread(void (*function)(void* arg), void* arg);
+
+  virtual Status GetTestDirectory(std::string* result) {
+    const char* env = getenv("TEST_TMPDIR");
+    if (env && env[0] != '\0') {
+      *result = env;
+    } else {
+      char buf[100];
+      snprintf(buf, sizeof(buf), "/tmp/leveldbtest-%d", int(geteuid()));
+      *result = buf;
+    }
+    // Directory may already exist
+    CreateDir(*result);
+    return Status::OK();
+  }
+
+  static uint64_t gettid() {
+    pthread_t tid = pthread_self();
+    uint64_t thread_id = 0;
+    memcpy(&thread_id, &tid, std::min(sizeof(thread_id), sizeof(tid)));
+    return thread_id;
+  }
+
+  virtual Status NewLogger(const std::string& fname, Logger** result) {
+    FILE* f = fopen(fname.c_str(), "w");
+    if (f == NULL) {
+      *result = NULL;
+      return IOError(fname, errno);
+    } else {
+      *result = new PosixLogger(f, &PosixEnv::gettid);
+      return Status::OK();
+    }
+  }
+
+  virtual uint64_t NowMicros() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return static_cast<uint64_t>(tv.tv_sec) * 1000000 + tv.tv_usec;
+  }
+
+  virtual void SleepForMicroseconds(int micros) {
+    usleep(micros);
+  }
+
+ private:
+  void PthreadCall(const char* label, int result) {
+    if (result != 0) {
+      fprintf(stderr, "pthread %s: %s\n", label, strerror(result));
+      abort();
+    }
+  }
+
+  // BGThread() is the body of the background thread
+  void BGThread();
+  static void* BGThreadWrapper(void* arg) {
+    reinterpret_cast<PosixEnv*>(arg)->BGThread();
+    return NULL;
+  }
+
+  pthread_mutex_t mu_;
+  pthread_cond_t bgsignal_;
+  pthread_t bgthread_;
+  bool started_bgthread_;
+
+  // Entry per Schedule() call
+  struct BGItem { void* arg; void (*function)(void*); };
+  typedef std::deque<BGItem> BGQueue;
+  BGQueue queue_;
+
+  PosixLockTable locks_;
+  MmapLimiter mmap_limit_;
+};
+
+PosixEnv::PosixEnv() : started_bgthread_(false) {
+  PthreadCall("mutex_init", pthread_mutex_init(&mu_, NULL));
+  PthreadCall("cvar_init", pthread_cond_init(&bgsignal_, NULL));
+}
+
+void PosixEnv::Schedule(void (*function)(void*), void* arg) {
+  PthreadCall("lock", pthread_mutex_lock(&mu_));
+
+  // Start background thread if necessary
+  if (!started_bgthread_) {
+    started_bgthread_ = true;
+    PthreadCall(
+        "create thread",
+        pthread_create(&bgthread_, NULL,  &PosixEnv::BGThreadWrapper, this));
+  }
+
+  // If the queue is currently empty, the background thread may currently be
+  // waiting.
+  if (queue_.empty()) {
+    PthreadCall("signal", pthread_cond_signal(&bgsignal_));
+  }
+
+  // Add to priority queue
+  queue_.push_back(BGItem());
+  queue_.back().function = function;
+  queue_.back().arg = arg;
+
+  PthreadCall("unlock", pthread_mutex_unlock(&mu_));
+}
+
+void PosixEnv::BGThread() {
+  while (true) {
+    // Wait until there is an item that is ready to run
+    PthreadCall("lock", pthread_mutex_lock(&mu_));
+    while (queue_.empty()) {
+      PthreadCall("wait", pthread_cond_wait(&bgsignal_, &mu_));
+    }
+
+    void (*function)(void*) = queue_.front().function;
+    void* arg = queue_.front().arg;
+    queue_.pop_front();
+
+    PthreadCall("unlock", pthread_mutex_unlock(&mu_));
+    (*function)(arg);
+  }
+}
+
+namespace {
+struct StartThreadState {
+  void (*user_function)(void*);
+  void* arg;
+};
+}
+static void* StartThreadWrapper(void* arg) {
+  StartThreadState* state = reinterpret_cast<StartThreadState*>(arg);
+  state->user_function(state->arg);
+  delete state;
+  return NULL;
+}
+
+void PosixEnv::StartThread(void (*function)(void* arg), void* arg) {
+  pthread_t t;
+  StartThreadState* state = new StartThreadState;
+  state->user_function = function;
+  state->arg = arg;
+  PthreadCall("start thread",
+              pthread_create(&t, NULL,  &StartThreadWrapper, state));
+}
+
+}  // namespace
+
+// static pthread_once_t once = PTHREAD_ONCE_INIT;
+static Env* default_env;
+static void InitDefaultEnv() { default_env = new PosixEnv; }
+
+Env* Env::Default() {
+  pthread_once(&once, InitDefaultEnv);
+  return default_env;
+}
+
+}  // namespace leveldb
+
+void memory_cleanse(void *ptr, size_t len)
+{
+    OPENSSL_cleanse(ptr, len);
+}
 
 // ------------------------------- txdb.cpp
 
