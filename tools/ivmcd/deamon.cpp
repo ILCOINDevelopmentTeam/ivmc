@@ -23,6 +23,7 @@
 #include <unistd.h>
 #include <vector>
 #include <utility>        // std::pair
+#include <map>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -76,6 +77,7 @@
 #include "leveldb/db/memtable.h"
 #include "leveldb/db/table_cache.h"
 #include "leveldb/db/version_set.h"
+#include "leveldb/db/version_edit.h"
 #include "leveldb/status.h"
 #include "leveldb/table.h"
 #include "leveldb/table_builder.h"
@@ -86,11 +88,17 @@
 #include "leveldb/util/hash.h"
 #include "leveldb/util/mutexlock.h"
 #include "leveldb/util/posix_logger.h"
+#include "leveldb/util/crc32c.h"
+#include "leveldb/util/random.h"
 #include "leveldb/port/port.h"
 #include "leveldb/port/port_posix.h"
 #include "leveldb/table/block.h"
 #include "leveldb/table/merger.h"
 #include "leveldb/table/two_level_iterator.h"
+#include "leveldb/table/block_builder.h"
+#include "leveldb/table/filter_block.h"
+#include "leveldb/table/format.h"
+#include "leveldb/table/iterator_wrapper.h"
 
 #include "random.h"
 #include "compat.h"
@@ -6521,6 +6529,4924 @@ Status DestroyDB(const std::string& dbname, const Options& options) {
     env->DeleteDir(dbname);  // Ignore error in case dir contains other files
   }
   return result;
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+namespace log {
+
+Reader::Reporter::~Reporter() {
+}
+
+Reader::Reader(SequentialFile* file, Reporter* reporter, bool checksum,
+               uint64_t initial_offset)
+    : file_(file),
+      reporter_(reporter),
+      checksum_(checksum),
+      backing_store_(new char[kBlockSize]),
+      buffer_(),
+      eof_(false),
+      last_record_offset_(0),
+      end_of_buffer_offset_(0),
+      initial_offset_(initial_offset),
+      resyncing_(initial_offset > 0) {
+}
+
+Reader::~Reader() {
+  delete[] backing_store_;
+}
+
+bool Reader::SkipToInitialBlock() {
+  size_t offset_in_block = initial_offset_ % kBlockSize;
+  uint64_t block_start_location = initial_offset_ - offset_in_block;
+
+  // Don't search a block if we'd be in the trailer
+  if (offset_in_block > kBlockSize - 6) {
+    offset_in_block = 0;
+    block_start_location += kBlockSize;
+  }
+
+  end_of_buffer_offset_ = block_start_location;
+
+  // Skip to start of first block that can contain the initial record
+  if (block_start_location > 0) {
+    Status skip_status = file_->Skip(block_start_location);
+    if (!skip_status.ok()) {
+      ReportDrop(block_start_location, skip_status);
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool Reader::ReadRecord(Slice* record, std::string* scratch) {
+  if (last_record_offset_ < initial_offset_) {
+    if (!SkipToInitialBlock()) {
+      return false;
+    }
+  }
+
+  scratch->clear();
+  record->clear();
+  bool in_fragmented_record = false;
+  // Record offset of the logical record that we're reading
+  // 0 is a dummy value to make compilers happy
+  uint64_t prospective_record_offset = 0;
+
+  Slice fragment;
+  while (true) {
+    const unsigned int record_type = ReadPhysicalRecord(&fragment);
+
+    // ReadPhysicalRecord may have only had an empty trailer remaining in its
+    // internal buffer. Calculate the offset of the next physical record now
+    // that it has returned, properly accounting for its header size.
+    uint64_t physical_record_offset =
+        end_of_buffer_offset_ - buffer_.size() - kHeaderSize - fragment.size();
+
+    if (resyncing_) {
+      if (record_type == kMiddleType) {
+        continue;
+      } else if (record_type == kLastType) {
+        resyncing_ = false;
+        continue;
+      } else {
+        resyncing_ = false;
+      }
+    }
+
+    switch (record_type) {
+      case kFullType:
+        if (in_fragmented_record) {
+          // Handle bug in earlier versions of log::Writer where
+          // it could emit an empty kFirstType record at the tail end
+          // of a block followed by a kFullType or kFirstType record
+          // at the beginning of the next block.
+          if (scratch->empty()) {
+            in_fragmented_record = false;
+          } else {
+            ReportCorruption(scratch->size(), "partial record without end(1)");
+          }
+        }
+        prospective_record_offset = physical_record_offset;
+        scratch->clear();
+        *record = fragment;
+        last_record_offset_ = prospective_record_offset;
+        return true;
+
+      case kFirstType:
+        if (in_fragmented_record) {
+          // Handle bug in earlier versions of log::Writer where
+          // it could emit an empty kFirstType record at the tail end
+          // of a block followed by a kFullType or kFirstType record
+          // at the beginning of the next block.
+          if (scratch->empty()) {
+            in_fragmented_record = false;
+          } else {
+            ReportCorruption(scratch->size(), "partial record without end(2)");
+          }
+        }
+        prospective_record_offset = physical_record_offset;
+        scratch->assign(fragment.data(), fragment.size());
+        in_fragmented_record = true;
+        break;
+
+      case kMiddleType:
+        if (!in_fragmented_record) {
+          ReportCorruption(fragment.size(),
+                           "missing start of fragmented record(1)");
+        } else {
+          scratch->append(fragment.data(), fragment.size());
+        }
+        break;
+
+      case kLastType:
+        if (!in_fragmented_record) {
+          ReportCorruption(fragment.size(),
+                           "missing start of fragmented record(2)");
+        } else {
+          scratch->append(fragment.data(), fragment.size());
+          *record = Slice(*scratch);
+          last_record_offset_ = prospective_record_offset;
+          return true;
+        }
+        break;
+
+      case kEof:
+        if (in_fragmented_record) {
+          // This can be caused by the writer dying immediately after
+          // writing a physical record but before completing the next; don't
+          // treat it as a corruption, just ignore the entire logical record.
+          scratch->clear();
+        }
+        return false;
+
+      case kBadRecord:
+        if (in_fragmented_record) {
+          ReportCorruption(scratch->size(), "error in middle of record");
+          in_fragmented_record = false;
+          scratch->clear();
+        }
+        break;
+
+      default: {
+        char buf[40];
+        snprintf(buf, sizeof(buf), "unknown record type %u", record_type);
+        ReportCorruption(
+            (fragment.size() + (in_fragmented_record ? scratch->size() : 0)),
+            buf);
+        in_fragmented_record = false;
+        scratch->clear();
+        break;
+      }
+    }
+  }
+  return false;
+}
+
+uint64_t Reader::LastRecordOffset() {
+  return last_record_offset_;
+}
+
+void Reader::ReportCorruption(uint64_t bytes, const char* reason) {
+  ReportDrop(bytes, Status::Corruption(reason));
+}
+
+void Reader::ReportDrop(uint64_t bytes, const Status& reason) {
+  if (reporter_ != NULL &&
+      end_of_buffer_offset_ - buffer_.size() - bytes >= initial_offset_) {
+    reporter_->Corruption(static_cast<size_t>(bytes), reason);
+  }
+}
+
+unsigned int Reader::ReadPhysicalRecord(Slice* result) {
+  while (true) {
+    if (buffer_.size() < kHeaderSize) {
+      if (!eof_) {
+        // Last read was a full read, so this is a trailer to skip
+        buffer_.clear();
+        Status status = file_->Read(kBlockSize, &buffer_, backing_store_);
+        end_of_buffer_offset_ += buffer_.size();
+        if (!status.ok()) {
+          buffer_.clear();
+          ReportDrop(kBlockSize, status);
+          eof_ = true;
+          return kEof;
+        } else if (buffer_.size() < kBlockSize) {
+          eof_ = true;
+        }
+        continue;
+      } else {
+        // Note that if buffer_ is non-empty, we have a truncated header at the
+        // end of the file, which can be caused by the writer crashing in the
+        // middle of writing the header. Instead of considering this an error,
+        // just report EOF.
+        buffer_.clear();
+        return kEof;
+      }
+    }
+
+    // Parse the header
+    const char* header = buffer_.data();
+    const uint32_t a = static_cast<uint32_t>(header[4]) & 0xff;
+    const uint32_t b = static_cast<uint32_t>(header[5]) & 0xff;
+    const unsigned int type = header[6];
+    const uint32_t length = a | (b << 8);
+    if (kHeaderSize + length > buffer_.size()) {
+      size_t drop_size = buffer_.size();
+      buffer_.clear();
+      if (!eof_) {
+        ReportCorruption(drop_size, "bad record length");
+        return kBadRecord;
+      }
+      // If the end of the file has been reached without reading |length| bytes
+      // of payload, assume the writer died in the middle of writing the record.
+      // Don't report a corruption.
+      return kEof;
+    }
+
+    if (type == kZeroType && length == 0) {
+      // Skip zero length record without reporting any drops since
+      // such records are produced by the mmap based writing code in
+      // env_posix.cc that preallocates file regions.
+      buffer_.clear();
+      return kBadRecord;
+    }
+
+    // Check crc
+    if (checksum_) {
+      uint32_t expected_crc = crc32c::Unmask(DecodeFixed32(header));
+      uint32_t actual_crc = crc32c::Value(header + 6, 1 + length);
+      if (actual_crc != expected_crc) {
+        // Drop the rest of the buffer since "length" itself may have
+        // been corrupted and if we trust it, we could find some
+        // fragment of a real log record that just happens to look
+        // like a valid log record.
+        size_t drop_size = buffer_.size();
+        buffer_.clear();
+        ReportCorruption(drop_size, "checksum mismatch");
+        return kBadRecord;
+      }
+    }
+
+    buffer_.remove_prefix(kHeaderSize + length);
+
+    // Skip physical record that started before initial_offset_
+    if (end_of_buffer_offset_ - buffer_.size() - kHeaderSize - length <
+        initial_offset_) {
+      result->clear();
+      return kBadRecord;
+    }
+
+    *result = Slice(header + kHeaderSize, length);
+    return type;
+  }
+}
+
+}  // namespace log
+}  // namespace leveldb
+
+namespace leveldb {
+
+static const int kTargetFileSize = 2 * 1048576;
+
+// Maximum bytes of overlaps in grandparent (i.e., level+2) before we
+// stop building a single file in a level->level+1 compaction.
+static const int64_t kMaxGrandParentOverlapBytes = 10 * kTargetFileSize;
+
+// Maximum number of bytes in all compacted files.  We avoid expanding
+// the lower level file set of a compaction if it would make the
+// total compaction cover more than this many bytes.
+static const int64_t kExpandedCompactionByteSizeLimit = 25 * kTargetFileSize;
+
+static double MaxBytesForLevel(int level) {
+  // Note: the result for level zero is not really used since we set
+  // the level-0 compaction threshold based on number of files.
+  double result = 10 * 1048576.0;  // Result for both level-0 and level-1
+  while (level > 1) {
+    result *= 10;
+    level--;
+  }
+  return result;
+}
+
+static uint64_t MaxFileSizeForLevel(int level) {
+  return kTargetFileSize;  // We could vary per level to reduce number of files?
+}
+
+static int64_t TotalFileSize(const std::vector<FileMetaData*>& files) {
+  int64_t sum = 0;
+  for (size_t i = 0; i < files.size(); i++) {
+    sum += files[i]->file_size;
+  }
+  return sum;
+}
+
+Version::~Version() {
+  assert(refs_ == 0);
+
+  // Remove from linked list
+  prev_->next_ = next_;
+  next_->prev_ = prev_;
+
+  // Drop references to files
+  for (int level = 0; level < config::kNumLevels; level++) {
+    for (size_t i = 0; i < files_[level].size(); i++) {
+      FileMetaData* f = files_[level][i];
+      assert(f->refs > 0);
+      f->refs--;
+      if (f->refs <= 0) {
+        delete f;
+      }
+    }
+  }
+}
+
+int FindFile(const InternalKeyComparator& icmp,
+             const std::vector<FileMetaData*>& files,
+             const Slice& key) {
+  uint32_t left = 0;
+  uint32_t right = files.size();
+  while (left < right) {
+    uint32_t mid = (left + right) / 2;
+    const FileMetaData* f = files[mid];
+    if (icmp.InternalKeyComparator::Compare(f->largest.Encode(), key) < 0) {
+      // Key at "mid.largest" is < "target".  Therefore all
+      // files at or before "mid" are uninteresting.
+      left = mid + 1;
+    } else {
+      // Key at "mid.largest" is >= "target".  Therefore all files
+      // after "mid" are uninteresting.
+      right = mid;
+    }
+  }
+  return right;
+}
+
+static bool AfterFile(const Comparator* ucmp,
+                      const Slice* user_key, const FileMetaData* f) {
+  // NULL user_key occurs before all keys and is therefore never after *f
+  return (user_key != NULL &&
+          ucmp->Compare(*user_key, f->largest.user_key()) > 0);
+}
+
+static bool BeforeFile(const Comparator* ucmp,
+                       const Slice* user_key, const FileMetaData* f) {
+  // NULL user_key occurs after all keys and is therefore never before *f
+  return (user_key != NULL &&
+          ucmp->Compare(*user_key, f->smallest.user_key()) < 0);
+}
+
+bool SomeFileOverlapsRange(
+    const InternalKeyComparator& icmp,
+    bool disjoint_sorted_files,
+    const std::vector<FileMetaData*>& files,
+    const Slice* smallest_user_key,
+    const Slice* largest_user_key) {
+  const Comparator* ucmp = icmp.user_comparator();
+  if (!disjoint_sorted_files) {
+    // Need to check against all files
+    for (size_t i = 0; i < files.size(); i++) {
+      const FileMetaData* f = files[i];
+      if (AfterFile(ucmp, smallest_user_key, f) ||
+          BeforeFile(ucmp, largest_user_key, f)) {
+        // No overlap
+      } else {
+        return true;  // Overlap
+      }
+    }
+    return false;
+  }
+
+  // Binary search over file list
+  uint32_t index = 0;
+  if (smallest_user_key != NULL) {
+    // Find the earliest possible internal key for smallest_user_key
+    InternalKey small(*smallest_user_key, kMaxSequenceNumber,kValueTypeForSeek);
+    index = FindFile(icmp, files, small.Encode());
+  }
+
+  if (index >= files.size()) {
+    // beginning of range is after all files, so no overlap.
+    return false;
+  }
+
+  return !BeforeFile(ucmp, largest_user_key, files[index]);
+}
+
+// An internal iterator.  For a given version/level pair, yields
+// information about the files in the level.  For a given entry, key()
+// is the largest key that occurs in the file, and value() is an
+// 16-byte value containing the file number and file size, both
+// encoded using EncodeFixed64.
+class Version::LevelFileNumIterator : public Iterator {
+ public:
+  LevelFileNumIterator(const InternalKeyComparator& icmp,
+                       const std::vector<FileMetaData*>* flist)
+      : icmp_(icmp),
+        flist_(flist),
+        index_(flist->size()) {        // Marks as invalid
+  }
+  virtual bool Valid() const {
+    return index_ < flist_->size();
+  }
+  virtual void Seek(const Slice& target) {
+    index_ = FindFile(icmp_, *flist_, target);
+  }
+  virtual void SeekToFirst() { index_ = 0; }
+  virtual void SeekToLast() {
+    index_ = flist_->empty() ? 0 : flist_->size() - 1;
+  }
+  virtual void Next() {
+    assert(Valid());
+    index_++;
+  }
+  virtual void Prev() {
+    assert(Valid());
+    if (index_ == 0) {
+      index_ = flist_->size();  // Marks as invalid
+    } else {
+      index_--;
+    }
+  }
+  Slice key() const {
+    assert(Valid());
+    return (*flist_)[index_]->largest.Encode();
+  }
+  Slice value() const {
+    assert(Valid());
+    EncodeFixed64(value_buf_, (*flist_)[index_]->number);
+    EncodeFixed64(value_buf_+8, (*flist_)[index_]->file_size);
+    return Slice(value_buf_, sizeof(value_buf_));
+  }
+  virtual Status status() const { return Status::OK(); }
+ private:
+  const InternalKeyComparator icmp_;
+  const std::vector<FileMetaData*>* const flist_;
+  uint32_t index_;
+
+  // Backing store for value().  Holds the file number and size.
+  mutable char value_buf_[16];
+};
+
+static Iterator* GetFileIterator(void* arg,
+                                 const ReadOptions& options,
+                                 const Slice& file_value) {
+  TableCache* cache = reinterpret_cast<TableCache*>(arg);
+  if (file_value.size() != 16) {
+    return NewErrorIterator(
+        Status::Corruption("FileReader invoked with unexpected value"));
+  } else {
+    return cache->NewIterator(options,
+                              DecodeFixed64(file_value.data()),
+                              DecodeFixed64(file_value.data() + 8));
+  }
+}
+
+Iterator* Version::NewConcatenatingIterator(const ReadOptions& options,
+                                            int level) const {
+  return NewTwoLevelIterator(
+      new LevelFileNumIterator(vset_->icmp_, &files_[level]),
+      &GetFileIterator, vset_->table_cache_, options);
+}
+
+void Version::AddIterators(const ReadOptions& options,
+                           std::vector<Iterator*>* iters) {
+  // Merge all level zero files together since they may overlap
+  for (size_t i = 0; i < files_[0].size(); i++) {
+    iters->push_back(
+        vset_->table_cache_->NewIterator(
+            options, files_[0][i]->number, files_[0][i]->file_size));
+  }
+
+  // For levels > 0, we can use a concatenating iterator that sequentially
+  // walks through the non-overlapping files in the level, opening them
+  // lazily.
+  for (int level = 1; level < config::kNumLevels; level++) {
+    if (!files_[level].empty()) {
+      iters->push_back(NewConcatenatingIterator(options, level));
+    }
+  }
+}
+
+// Callback from TableCache::Get()
+namespace {
+enum SaverState {
+  kNotFound,
+  kFound,
+  kDeleted,
+  kCorrupt,
+};
+struct Saver {
+  SaverState state;
+  const Comparator* ucmp;
+  Slice user_key;
+  std::string* value;
+};
+}
+static void SaveValue(void* arg, const Slice& ikey, const Slice& v) {
+  Saver* s = reinterpret_cast<Saver*>(arg);
+  ParsedInternalKey parsed_key;
+  if (!ParseInternalKey(ikey, &parsed_key)) {
+    s->state = kCorrupt;
+  } else {
+    if (s->ucmp->Compare(parsed_key.user_key, s->user_key) == 0) {
+      s->state = (parsed_key.type == kTypeValue) ? kFound : kDeleted;
+      if (s->state == kFound) {
+        s->value->assign(v.data(), v.size());
+      }
+    }
+  }
+}
+
+static bool NewestFirst(FileMetaData* a, FileMetaData* b) {
+  return a->number > b->number;
+}
+
+void Version::ForEachOverlapping(Slice user_key, Slice internal_key,
+                                 void* arg,
+                                 bool (*func)(void*, int, FileMetaData*)) {
+  // TODO(sanjay): Change Version::Get() to use this function.
+  const Comparator* ucmp = vset_->icmp_.user_comparator();
+
+  // Search level-0 in order from newest to oldest.
+  std::vector<FileMetaData*> tmp;
+  tmp.reserve(files_[0].size());
+  for (uint32_t i = 0; i < files_[0].size(); i++) {
+    FileMetaData* f = files_[0][i];
+    if (ucmp->Compare(user_key, f->smallest.user_key()) >= 0 &&
+        ucmp->Compare(user_key, f->largest.user_key()) <= 0) {
+      tmp.push_back(f);
+    }
+  }
+  if (!tmp.empty()) {
+    std::sort(tmp.begin(), tmp.end(), NewestFirst);
+    for (uint32_t i = 0; i < tmp.size(); i++) {
+      if (!(*func)(arg, 0, tmp[i])) {
+        return;
+      }
+    }
+  }
+
+  // Search other levels.
+  for (int level = 1; level < config::kNumLevels; level++) {
+    size_t num_files = files_[level].size();
+    if (num_files == 0) continue;
+
+    // Binary search to find earliest index whose largest key >= internal_key.
+    uint32_t index = FindFile(vset_->icmp_, files_[level], internal_key);
+    if (index < num_files) {
+      FileMetaData* f = files_[level][index];
+      if (ucmp->Compare(user_key, f->smallest.user_key()) < 0) {
+        // All of "f" is past any data for user_key
+      } else {
+        if (!(*func)(arg, level, f)) {
+          return;
+        }
+      }
+    }
+  }
+}
+
+Status Version::Get(const ReadOptions& options,
+                    const LookupKey& k,
+                    std::string* value,
+                    GetStats* stats) {
+  Slice ikey = k.internal_key();
+  Slice user_key = k.user_key();
+  const Comparator* ucmp = vset_->icmp_.user_comparator();
+  Status s;
+
+  stats->seek_file = NULL;
+  stats->seek_file_level = -1;
+  FileMetaData* last_file_read = NULL;
+  int last_file_read_level = -1;
+
+  // We can search level-by-level since entries never hop across
+  // levels.  Therefore we are guaranteed that if we find data
+  // in an smaller level, later levels are irrelevant.
+  std::vector<FileMetaData*> tmp;
+  FileMetaData* tmp2;
+  for (int level = 0; level < config::kNumLevels; level++) {
+    size_t num_files = files_[level].size();
+    if (num_files == 0) continue;
+
+    // Get the list of files to search in this level
+    FileMetaData* const* files = &files_[level][0];
+    if (level == 0) {
+      // Level-0 files may overlap each other.  Find all files that
+      // overlap user_key and process them in order from newest to oldest.
+      tmp.reserve(num_files);
+      for (uint32_t i = 0; i < num_files; i++) {
+        FileMetaData* f = files[i];
+        if (ucmp->Compare(user_key, f->smallest.user_key()) >= 0 &&
+            ucmp->Compare(user_key, f->largest.user_key()) <= 0) {
+          tmp.push_back(f);
+        }
+      }
+      if (tmp.empty()) continue;
+
+      std::sort(tmp.begin(), tmp.end(), NewestFirst);
+      files = &tmp[0];
+      num_files = tmp.size();
+    } else {
+      // Binary search to find earliest index whose largest key >= ikey.
+      uint32_t index = FindFile(vset_->icmp_, files_[level], ikey);
+      if (index >= num_files) {
+        files = NULL;
+        num_files = 0;
+      } else {
+        tmp2 = files[index];
+        if (ucmp->Compare(user_key, tmp2->smallest.user_key()) < 0) {
+          // All of "tmp2" is past any data for user_key
+          files = NULL;
+          num_files = 0;
+        } else {
+          files = &tmp2;
+          num_files = 1;
+        }
+      }
+    }
+
+    for (uint32_t i = 0; i < num_files; ++i) {
+      if (last_file_read != NULL && stats->seek_file == NULL) {
+        // We have had more than one seek for this read.  Charge the 1st file.
+        stats->seek_file = last_file_read;
+        stats->seek_file_level = last_file_read_level;
+      }
+
+      FileMetaData* f = files[i];
+      last_file_read = f;
+      last_file_read_level = level;
+
+      Saver saver;
+      saver.state = kNotFound;
+      saver.ucmp = ucmp;
+      saver.user_key = user_key;
+      saver.value = value;
+      s = vset_->table_cache_->Get(options, f->number, f->file_size,
+                                   ikey, &saver, SaveValue);
+      if (!s.ok()) {
+        return s;
+      }
+      switch (saver.state) {
+        case kNotFound:
+          break;      // Keep searching in other files
+        case kFound:
+          return s;
+        case kDeleted:
+          s = Status::NotFound(Slice());  // Use empty error message for speed
+          return s;
+        case kCorrupt:
+          s = Status::Corruption("corrupted key for ", user_key);
+          return s;
+      }
+    }
+  }
+
+  return Status::NotFound(Slice());  // Use an empty error message for speed
+}
+
+bool Version::UpdateStats(const GetStats& stats) {
+  FileMetaData* f = stats.seek_file;
+  if (f != NULL) {
+    f->allowed_seeks--;
+    if (f->allowed_seeks <= 0 && file_to_compact_ == NULL) {
+      file_to_compact_ = f;
+      file_to_compact_level_ = stats.seek_file_level;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool Version::RecordReadSample(Slice internal_key) {
+  ParsedInternalKey ikey;
+  if (!ParseInternalKey(internal_key, &ikey)) {
+    return false;
+  }
+
+  struct State {
+    GetStats stats;  // Holds first matching file
+    int matches;
+
+    static bool Match(void* arg, int level, FileMetaData* f) {
+      State* state = reinterpret_cast<State*>(arg);
+      state->matches++;
+      if (state->matches == 1) {
+        // Remember first match.
+        state->stats.seek_file = f;
+        state->stats.seek_file_level = level;
+      }
+      // We can stop iterating once we have a second match.
+      return state->matches < 2;
+    }
+  };
+
+  State state;
+  state.matches = 0;
+  ForEachOverlapping(ikey.user_key, internal_key, &state, &State::Match);
+
+  // Must have at least two matches since we want to merge across
+  // files. But what if we have a single file that contains many
+  // overwrites and deletions?  Should we have another mechanism for
+  // finding such files?
+  if (state.matches >= 2) {
+    // 1MB cost is about 1 seek (see comment in Builder::Apply).
+    return UpdateStats(state.stats);
+  }
+  return false;
+}
+
+void Version::Ref() {
+  ++refs_;
+}
+
+void Version::Unref() {
+  assert(this != &vset_->dummy_versions_);
+  assert(refs_ >= 1);
+  --refs_;
+  if (refs_ == 0) {
+    delete this;
+  }
+}
+
+bool Version::OverlapInLevel(int level,
+                             const Slice* smallest_user_key,
+                             const Slice* largest_user_key) {
+  return SomeFileOverlapsRange(vset_->icmp_, (level > 0), files_[level],
+                               smallest_user_key, largest_user_key);
+}
+
+int Version::PickLevelForMemTableOutput(
+    const Slice& smallest_user_key,
+    const Slice& largest_user_key) {
+  int level = 0;
+  if (!OverlapInLevel(0, &smallest_user_key, &largest_user_key)) {
+    // Push to next level if there is no overlap in next level,
+    // and the #bytes overlapping in the level after that are limited.
+    InternalKey start(smallest_user_key, kMaxSequenceNumber, kValueTypeForSeek);
+    InternalKey limit(largest_user_key, 0, static_cast<ValueType>(0));
+    std::vector<FileMetaData*> overlaps;
+    while (level < config::kMaxMemCompactLevel) {
+      if (OverlapInLevel(level + 1, &smallest_user_key, &largest_user_key)) {
+        break;
+      }
+      if (level + 2 < config::kNumLevels) {
+        // Check that file does not overlap too many grandparent bytes.
+        GetOverlappingInputs(level + 2, &start, &limit, &overlaps);
+        const int64_t sum = TotalFileSize(overlaps);
+        if (sum > kMaxGrandParentOverlapBytes) {
+          break;
+        }
+      }
+      level++;
+    }
+  }
+  return level;
+}
+
+// Store in "*inputs" all files in "level" that overlap [begin,end]
+void Version::GetOverlappingInputs(
+    int level,
+    const InternalKey* begin,
+    const InternalKey* end,
+    std::vector<FileMetaData*>* inputs) {
+  assert(level >= 0);
+  assert(level < config::kNumLevels);
+  inputs->clear();
+  Slice user_begin, user_end;
+  if (begin != NULL) {
+    user_begin = begin->user_key();
+  }
+  if (end != NULL) {
+    user_end = end->user_key();
+  }
+  const Comparator* user_cmp = vset_->icmp_.user_comparator();
+  for (size_t i = 0; i < files_[level].size(); ) {
+    FileMetaData* f = files_[level][i++];
+    const Slice file_start = f->smallest.user_key();
+    const Slice file_limit = f->largest.user_key();
+    if (begin != NULL && user_cmp->Compare(file_limit, user_begin) < 0) {
+      // "f" is completely before specified range; skip it
+    } else if (end != NULL && user_cmp->Compare(file_start, user_end) > 0) {
+      // "f" is completely after specified range; skip it
+    } else {
+      inputs->push_back(f);
+      if (level == 0) {
+        // Level-0 files may overlap each other.  So check if the newly
+        // added file has expanded the range.  If so, restart search.
+        if (begin != NULL && user_cmp->Compare(file_start, user_begin) < 0) {
+          user_begin = file_start;
+          inputs->clear();
+          i = 0;
+        } else if (end != NULL && user_cmp->Compare(file_limit, user_end) > 0) {
+          user_end = file_limit;
+          inputs->clear();
+          i = 0;
+        }
+      }
+    }
+  }
+}
+
+std::string Version::DebugString() const {
+  std::string r;
+  for (int level = 0; level < config::kNumLevels; level++) {
+    // E.g.,
+    //   --- level 1 ---
+    //   17:123['a' .. 'd']
+    //   20:43['e' .. 'g']
+    r.append("--- level ");
+    AppendNumberTo(&r, level);
+    r.append(" ---\n");
+    const std::vector<FileMetaData*>& files = files_[level];
+    for (size_t i = 0; i < files.size(); i++) {
+      r.push_back(' ');
+      AppendNumberTo(&r, files[i]->number);
+      r.push_back(':');
+      AppendNumberTo(&r, files[i]->file_size);
+      r.append("[");
+      r.append(files[i]->smallest.DebugString());
+      r.append(" .. ");
+      r.append(files[i]->largest.DebugString());
+      r.append("]\n");
+    }
+  }
+  return r;
+}
+
+// A helper class so we can efficiently apply a whole sequence
+// of edits to a particular state without creating intermediate
+// Versions that contain full copies of the intermediate state.
+class VersionSet::Builder {
+ private:
+  // Helper to sort by v->files_[file_number].smallest
+  struct BySmallestKey {
+    const InternalKeyComparator* internal_comparator;
+
+    bool operator()(FileMetaData* f1, FileMetaData* f2) const {
+      int r = internal_comparator->Compare(f1->smallest, f2->smallest);
+      if (r != 0) {
+        return (r < 0);
+      } else {
+        // Break ties by file number
+        return (f1->number < f2->number);
+      }
+    }
+  };
+
+  typedef std::set<FileMetaData*, BySmallestKey> FileSet;
+  struct LevelState {
+    std::set<uint64_t> deleted_files;
+    FileSet* added_files;
+  };
+
+  VersionSet* vset_;
+  Version* base_;
+  LevelState levels_[config::kNumLevels];
+
+ public:
+  // Initialize a builder with the files from *base and other info from *vset
+  Builder(VersionSet* vset, Version* base)
+      : vset_(vset),
+        base_(base) {
+    base_->Ref();
+    BySmallestKey cmp;
+    cmp.internal_comparator = &vset_->icmp_;
+    for (int level = 0; level < config::kNumLevels; level++) {
+      levels_[level].added_files = new FileSet(cmp);
+    }
+  }
+
+  ~Builder() {
+    for (int level = 0; level < config::kNumLevels; level++) {
+      const FileSet* added = levels_[level].added_files;
+      std::vector<FileMetaData*> to_unref;
+      to_unref.reserve(added->size());
+      for (FileSet::const_iterator it = added->begin();
+          it != added->end(); ++it) {
+        to_unref.push_back(*it);
+      }
+      delete added;
+      for (uint32_t i = 0; i < to_unref.size(); i++) {
+        FileMetaData* f = to_unref[i];
+        f->refs--;
+        if (f->refs <= 0) {
+          delete f;
+        }
+      }
+    }
+    base_->Unref();
+  }
+
+  // Apply all of the edits in *edit to the current state.
+  void Apply(VersionEdit* edit) {
+    // Update compaction pointers
+    for (size_t i = 0; i < edit->compact_pointers_.size(); i++) {
+      const int level = edit->compact_pointers_[i].first;
+      vset_->compact_pointer_[level] =
+          edit->compact_pointers_[i].second.Encode().ToString();
+    }
+
+    // Delete files
+    const VersionEdit::DeletedFileSet& del = edit->deleted_files_;
+    for (VersionEdit::DeletedFileSet::const_iterator iter = del.begin();
+         iter != del.end();
+         ++iter) {
+      const int level = iter->first;
+      const uint64_t number = iter->second;
+      levels_[level].deleted_files.insert(number);
+    }
+
+    // Add new files
+    for (size_t i = 0; i < edit->new_files_.size(); i++) {
+      const int level = edit->new_files_[i].first;
+      FileMetaData* f = new FileMetaData(edit->new_files_[i].second);
+      f->refs = 1;
+
+      // We arrange to automatically compact this file after
+      // a certain number of seeks.  Let's assume:
+      //   (1) One seek costs 10ms
+      //   (2) Writing or reading 1MB costs 10ms (100MB/s)
+      //   (3) A compaction of 1MB does 25MB of IO:
+      //         1MB read from this level
+      //         10-12MB read from next level (boundaries may be misaligned)
+      //         10-12MB written to next level
+      // This implies that 25 seeks cost the same as the compaction
+      // of 1MB of data.  I.e., one seek costs approximately the
+      // same as the compaction of 40KB of data.  We are a little
+      // conservative and allow approximately one seek for every 16KB
+      // of data before triggering a compaction.
+      f->allowed_seeks = (f->file_size / 16384);
+      if (f->allowed_seeks < 100) f->allowed_seeks = 100;
+
+      levels_[level].deleted_files.erase(f->number);
+      levels_[level].added_files->insert(f);
+    }
+  }
+
+  // Save the current state in *v.
+  void SaveTo(Version* v) {
+    BySmallestKey cmp;
+    cmp.internal_comparator = &vset_->icmp_;
+    for (int level = 0; level < config::kNumLevels; level++) {
+      // Merge the set of added files with the set of pre-existing files.
+      // Drop any deleted files.  Store the result in *v.
+      const std::vector<FileMetaData*>& base_files = base_->files_[level];
+      std::vector<FileMetaData*>::const_iterator base_iter = base_files.begin();
+      std::vector<FileMetaData*>::const_iterator base_end = base_files.end();
+      const FileSet* added = levels_[level].added_files;
+      v->files_[level].reserve(base_files.size() + added->size());
+      for (FileSet::const_iterator added_iter = added->begin();
+           added_iter != added->end();
+           ++added_iter) {
+        // Add all smaller files listed in base_
+        for (std::vector<FileMetaData*>::const_iterator bpos
+                 = std::upper_bound(base_iter, base_end, *added_iter, cmp);
+             base_iter != bpos;
+             ++base_iter) {
+          MaybeAddFile(v, level, *base_iter);
+        }
+
+        MaybeAddFile(v, level, *added_iter);
+      }
+
+      // Add remaining base files
+      for (; base_iter != base_end; ++base_iter) {
+        MaybeAddFile(v, level, *base_iter);
+      }
+
+#ifndef NDEBUG
+      // Make sure there is no overlap in levels > 0
+      if (level > 0) {
+        for (uint32_t i = 1; i < v->files_[level].size(); i++) {
+          const InternalKey& prev_end = v->files_[level][i-1]->largest;
+          const InternalKey& this_begin = v->files_[level][i]->smallest;
+          if (vset_->icmp_.Compare(prev_end, this_begin) >= 0) {
+            fprintf(stderr, "overlapping ranges in same level %s vs. %s\n",
+                    prev_end.DebugString().c_str(),
+                    this_begin.DebugString().c_str());
+            abort();
+          }
+        }
+      }
+#endif
+    }
+  }
+
+  void MaybeAddFile(Version* v, int level, FileMetaData* f) {
+    if (levels_[level].deleted_files.count(f->number) > 0) {
+      // File is deleted: do nothing
+    } else {
+      std::vector<FileMetaData*>* files = &v->files_[level];
+      if (level > 0 && !files->empty()) {
+        // Must not overlap
+        assert(vset_->icmp_.Compare((*files)[files->size()-1]->largest,
+                                    f->smallest) < 0);
+      }
+      f->refs++;
+      files->push_back(f);
+    }
+  }
+};
+
+VersionSet::VersionSet(const std::string& dbname,
+                       const Options* options,
+                       TableCache* table_cache,
+                       const InternalKeyComparator* cmp)
+    : env_(options->env),
+      dbname_(dbname),
+      options_(options),
+      table_cache_(table_cache),
+      icmp_(*cmp),
+      next_file_number_(2),
+      manifest_file_number_(0),  // Filled by Recover()
+      last_sequence_(0),
+      log_number_(0),
+      prev_log_number_(0),
+      descriptor_file_(NULL),
+      descriptor_log_(NULL),
+      dummy_versions_(this),
+      current_(NULL) {
+  AppendVersion(new Version(this));
+}
+
+VersionSet::~VersionSet() {
+  current_->Unref();
+  assert(dummy_versions_.next_ == &dummy_versions_);  // List must be empty
+  delete descriptor_log_;
+  delete descriptor_file_;
+}
+
+void VersionSet::AppendVersion(Version* v) {
+  // Make "v" current
+  assert(v->refs_ == 0);
+  assert(v != current_);
+  if (current_ != NULL) {
+    current_->Unref();
+  }
+  current_ = v;
+  v->Ref();
+
+  // Append to linked list
+  v->prev_ = dummy_versions_.prev_;
+  v->next_ = &dummy_versions_;
+  v->prev_->next_ = v;
+  v->next_->prev_ = v;
+}
+
+Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
+  if (edit->has_log_number_) {
+    assert(edit->log_number_ >= log_number_);
+    assert(edit->log_number_ < next_file_number_);
+  } else {
+    edit->SetLogNumber(log_number_);
+  }
+
+  if (!edit->has_prev_log_number_) {
+    edit->SetPrevLogNumber(prev_log_number_);
+  }
+
+  edit->SetNextFile(next_file_number_);
+  edit->SetLastSequence(last_sequence_);
+
+  Version* v = new Version(this);
+  {
+    Builder builder(this, current_);
+    builder.Apply(edit);
+    builder.SaveTo(v);
+  }
+  Finalize(v);
+
+  // Initialize new descriptor log file if necessary by creating
+  // a temporary file that contains a snapshot of the current version.
+  std::string new_manifest_file;
+  Status s;
+  if (descriptor_log_ == NULL) {
+    // No reason to unlock *mu here since we only hit this path in the
+    // first call to LogAndApply (when opening the database).
+    assert(descriptor_file_ == NULL);
+    new_manifest_file = DescriptorFileName(dbname_, manifest_file_number_);
+    edit->SetNextFile(next_file_number_);
+    s = env_->NewWritableFile(new_manifest_file, &descriptor_file_);
+    if (s.ok()) {
+      descriptor_log_ = new log::Writer(descriptor_file_);
+      s = WriteSnapshot(descriptor_log_);
+    }
+  }
+
+  // Unlock during expensive MANIFEST log write
+  {
+    mu->Unlock();
+
+    // Write new record to MANIFEST log
+    if (s.ok()) {
+      std::string record;
+      edit->EncodeTo(&record);
+      s = descriptor_log_->AddRecord(record);
+      if (s.ok()) {
+        s = descriptor_file_->Sync();
+      }
+      if (!s.ok()) {
+        Log(options_->info_log, "MANIFEST write: %s\n", s.ToString().c_str());
+      }
+    }
+
+    // If we just created a new descriptor file, install it by writing a
+    // new CURRENT file that points to it.
+    if (s.ok() && !new_manifest_file.empty()) {
+      s = SetCurrentFile(env_, dbname_, manifest_file_number_);
+    }
+
+    mu->Lock();
+  }
+
+  // Install the new version
+  if (s.ok()) {
+    AppendVersion(v);
+    log_number_ = edit->log_number_;
+    prev_log_number_ = edit->prev_log_number_;
+  } else {
+    delete v;
+    if (!new_manifest_file.empty()) {
+      delete descriptor_log_;
+      delete descriptor_file_;
+      descriptor_log_ = NULL;
+      descriptor_file_ = NULL;
+      env_->DeleteFile(new_manifest_file);
+    }
+  }
+
+  return s;
+}
+
+Status VersionSet::Recover(bool *save_manifest) {
+  struct LogReporter : public log::Reader::Reporter {
+    Status* status;
+    virtual void Corruption(size_t bytes, const Status& s) {
+      if (this->status->ok()) *this->status = s;
+    }
+  };
+
+  // Read "CURRENT" file, which contains a pointer to the current manifest file
+  std::string current;
+  Status s = ReadFileToString(env_, CurrentFileName(dbname_), &current);
+  if (!s.ok()) {
+    return s;
+  }
+  if (current.empty() || current[current.size()-1] != '\n') {
+    return Status::Corruption("CURRENT file does not end with newline");
+  }
+  current.resize(current.size() - 1);
+
+  std::string dscname = dbname_ + "/" + current;
+  SequentialFile* file;
+  s = env_->NewSequentialFile(dscname, &file);
+  if (!s.ok()) {
+    return s;
+  }
+
+  bool have_log_number = false;
+  bool have_prev_log_number = false;
+  bool have_next_file = false;
+  bool have_last_sequence = false;
+  uint64_t next_file = 0;
+  uint64_t last_sequence = 0;
+  uint64_t log_number = 0;
+  uint64_t prev_log_number = 0;
+  Builder builder(this, current_);
+
+  {
+    LogReporter reporter;
+    reporter.status = &s;
+    log::Reader reader(file, &reporter, true/*checksum*/, 0/*initial_offset*/);
+    Slice record;
+    std::string scratch;
+    while (reader.ReadRecord(&record, &scratch) && s.ok()) {
+      VersionEdit edit;
+      s = edit.DecodeFrom(record);
+      if (s.ok()) {
+        if (edit.has_comparator_ &&
+            edit.comparator_ != icmp_.user_comparator()->Name()) {
+          s = Status::InvalidArgument(
+              edit.comparator_ + " does not match existing comparator ",
+              icmp_.user_comparator()->Name());
+        }
+      }
+
+      if (s.ok()) {
+        builder.Apply(&edit);
+      }
+
+      if (edit.has_log_number_) {
+        log_number = edit.log_number_;
+        have_log_number = true;
+      }
+
+      if (edit.has_prev_log_number_) {
+        prev_log_number = edit.prev_log_number_;
+        have_prev_log_number = true;
+      }
+
+      if (edit.has_next_file_number_) {
+        next_file = edit.next_file_number_;
+        have_next_file = true;
+      }
+
+      if (edit.has_last_sequence_) {
+        last_sequence = edit.last_sequence_;
+        have_last_sequence = true;
+      }
+    }
+  }
+  delete file;
+  file = NULL;
+
+  if (s.ok()) {
+    if (!have_next_file) {
+      s = Status::Corruption("no meta-nextfile entry in descriptor");
+    } else if (!have_log_number) {
+      s = Status::Corruption("no meta-lognumber entry in descriptor");
+    } else if (!have_last_sequence) {
+      s = Status::Corruption("no last-sequence-number entry in descriptor");
+    }
+
+    if (!have_prev_log_number) {
+      prev_log_number = 0;
+    }
+
+    MarkFileNumberUsed(prev_log_number);
+    MarkFileNumberUsed(log_number);
+  }
+
+  if (s.ok()) {
+    Version* v = new Version(this);
+    builder.SaveTo(v);
+    // Install recovered version
+    Finalize(v);
+    AppendVersion(v);
+    manifest_file_number_ = next_file;
+    next_file_number_ = next_file + 1;
+    last_sequence_ = last_sequence;
+    log_number_ = log_number;
+    prev_log_number_ = prev_log_number;
+
+    // See if we can reuse the existing MANIFEST file.
+    if (ReuseManifest(dscname, current)) {
+      // No need to save new manifest
+    } else {
+      *save_manifest = true;
+    }
+  }
+
+  return s;
+}
+
+bool VersionSet::ReuseManifest(const std::string& dscname,
+                               const std::string& dscbase) {
+  if (!options_->reuse_logs) {
+    return false;
+  }
+  FileType manifest_type;
+  uint64_t manifest_number;
+  uint64_t manifest_size;
+  if (!ParseFileName(dscbase, &manifest_number, &manifest_type) ||
+      manifest_type != kDescriptorFile ||
+      !env_->GetFileSize(dscname, &manifest_size).ok() ||
+      // Make new compacted MANIFEST if old one is too big
+      manifest_size >= kTargetFileSize) {
+    return false;
+  }
+
+  assert(descriptor_file_ == NULL);
+  assert(descriptor_log_ == NULL);
+  Status r = env_->NewAppendableFile(dscname, &descriptor_file_);
+  if (!r.ok()) {
+    Log(options_->info_log, "Reuse MANIFEST: %s\n", r.ToString().c_str());
+    assert(descriptor_file_ == NULL);
+    return false;
+  }
+
+  Log(options_->info_log, "Reusing MANIFEST %s\n", dscname.c_str());
+  descriptor_log_ = new log::Writer(descriptor_file_, manifest_size);
+  manifest_file_number_ = manifest_number;
+  return true;
+}
+
+void VersionSet::MarkFileNumberUsed(uint64_t number) {
+  if (next_file_number_ <= number) {
+    next_file_number_ = number + 1;
+  }
+}
+
+void VersionSet::Finalize(Version* v) {
+  // Precomputed best level for next compaction
+  int best_level = -1;
+  double best_score = -1;
+
+  for (int level = 0; level < config::kNumLevels-1; level++) {
+    double score;
+    if (level == 0) {
+      // We treat level-0 specially by bounding the number of files
+      // instead of number of bytes for two reasons:
+      //
+      // (1) With larger write-buffer sizes, it is nice not to do too
+      // many level-0 compactions.
+      //
+      // (2) The files in level-0 are merged on every read and
+      // therefore we wish to avoid too many files when the individual
+      // file size is small (perhaps because of a small write-buffer
+      // setting, or very high compression ratios, or lots of
+      // overwrites/deletions).
+      score = v->files_[level].size() /
+          static_cast<double>(config::kL0_CompactionTrigger);
+    } else {
+      // Compute the ratio of current size to size limit.
+      const uint64_t level_bytes = TotalFileSize(v->files_[level]);
+      score = static_cast<double>(level_bytes) / MaxBytesForLevel(level);
+    }
+
+    if (score > best_score) {
+      best_level = level;
+      best_score = score;
+    }
+  }
+
+  v->compaction_level_ = best_level;
+  v->compaction_score_ = best_score;
+}
+
+Status VersionSet::WriteSnapshot(log::Writer* log) {
+  // TODO: Break up into multiple records to reduce memory usage on recovery?
+
+  // Save metadata
+  VersionEdit edit;
+  edit.SetComparatorName(icmp_.user_comparator()->Name());
+
+  // Save compaction pointers
+  for (int level = 0; level < config::kNumLevels; level++) {
+    if (!compact_pointer_[level].empty()) {
+      InternalKey key;
+      key.DecodeFrom(compact_pointer_[level]);
+      edit.SetCompactPointer(level, key);
+    }
+  }
+
+  // Save files
+  for (int level = 0; level < config::kNumLevels; level++) {
+    const std::vector<FileMetaData*>& files = current_->files_[level];
+    for (size_t i = 0; i < files.size(); i++) {
+      const FileMetaData* f = files[i];
+      edit.AddFile(level, f->number, f->file_size, f->smallest, f->largest);
+    }
+  }
+
+  std::string record;
+  edit.EncodeTo(&record);
+  return log->AddRecord(record);
+}
+
+int VersionSet::NumLevelFiles(int level) const {
+  assert(level >= 0);
+  assert(level < config::kNumLevels);
+  return current_->files_[level].size();
+}
+
+const char* VersionSet::LevelSummary(LevelSummaryStorage* scratch) const {
+  // Update code if kNumLevels changes
+  assert(config::kNumLevels == 7);
+  snprintf(scratch->buffer, sizeof(scratch->buffer),
+           "files[ %d %d %d %d %d %d %d ]",
+           int(current_->files_[0].size()),
+           int(current_->files_[1].size()),
+           int(current_->files_[2].size()),
+           int(current_->files_[3].size()),
+           int(current_->files_[4].size()),
+           int(current_->files_[5].size()),
+           int(current_->files_[6].size()));
+  return scratch->buffer;
+}
+
+uint64_t VersionSet::ApproximateOffsetOf(Version* v, const InternalKey& ikey) {
+  uint64_t result = 0;
+  for (int level = 0; level < config::kNumLevels; level++) {
+    const std::vector<FileMetaData*>& files = v->files_[level];
+    for (size_t i = 0; i < files.size(); i++) {
+      if (icmp_.Compare(files[i]->largest, ikey) <= 0) {
+        // Entire file is before "ikey", so just add the file size
+        result += files[i]->file_size;
+      } else if (icmp_.Compare(files[i]->smallest, ikey) > 0) {
+        // Entire file is after "ikey", so ignore
+        if (level > 0) {
+          // Files other than level 0 are sorted by meta->smallest, so
+          // no further files in this level will contain data for
+          // "ikey".
+          break;
+        }
+      } else {
+        // "ikey" falls in the range for this table.  Add the
+        // approximate offset of "ikey" within the table.
+        Table* tableptr;
+        Iterator* iter = table_cache_->NewIterator(
+            ReadOptions(), files[i]->number, files[i]->file_size, &tableptr);
+        if (tableptr != NULL) {
+          result += tableptr->ApproximateOffsetOf(ikey.Encode());
+        }
+        delete iter;
+      }
+    }
+  }
+  return result;
+}
+
+void VersionSet::AddLiveFiles(std::set<uint64_t>* live) {
+  for (Version* v = dummy_versions_.next_;
+       v != &dummy_versions_;
+       v = v->next_) {
+    for (int level = 0; level < config::kNumLevels; level++) {
+      const std::vector<FileMetaData*>& files = v->files_[level];
+      for (size_t i = 0; i < files.size(); i++) {
+        live->insert(files[i]->number);
+      }
+    }
+  }
+}
+
+int64_t VersionSet::NumLevelBytes(int level) const {
+  assert(level >= 0);
+  assert(level < config::kNumLevels);
+  return TotalFileSize(current_->files_[level]);
+}
+
+int64_t VersionSet::MaxNextLevelOverlappingBytes() {
+  int64_t result = 0;
+  std::vector<FileMetaData*> overlaps;
+  for (int level = 1; level < config::kNumLevels - 1; level++) {
+    for (size_t i = 0; i < current_->files_[level].size(); i++) {
+      const FileMetaData* f = current_->files_[level][i];
+      current_->GetOverlappingInputs(level+1, &f->smallest, &f->largest,
+                                     &overlaps);
+      const int64_t sum = TotalFileSize(overlaps);
+      if (sum > result) {
+        result = sum;
+      }
+    }
+  }
+  return result;
+}
+
+// Stores the minimal range that covers all entries in inputs in
+// *smallest, *largest.
+// REQUIRES: inputs is not empty
+void VersionSet::GetRange(const std::vector<FileMetaData*>& inputs,
+                          InternalKey* smallest,
+                          InternalKey* largest) {
+  assert(!inputs.empty());
+  smallest->Clear();
+  largest->Clear();
+  for (size_t i = 0; i < inputs.size(); i++) {
+    FileMetaData* f = inputs[i];
+    if (i == 0) {
+      *smallest = f->smallest;
+      *largest = f->largest;
+    } else {
+      if (icmp_.Compare(f->smallest, *smallest) < 0) {
+        *smallest = f->smallest;
+      }
+      if (icmp_.Compare(f->largest, *largest) > 0) {
+        *largest = f->largest;
+      }
+    }
+  }
+}
+
+// Stores the minimal range that covers all entries in inputs1 and inputs2
+// in *smallest, *largest.
+// REQUIRES: inputs is not empty
+void VersionSet::GetRange2(const std::vector<FileMetaData*>& inputs1,
+                           const std::vector<FileMetaData*>& inputs2,
+                           InternalKey* smallest,
+                           InternalKey* largest) {
+  std::vector<FileMetaData*> all = inputs1;
+  all.insert(all.end(), inputs2.begin(), inputs2.end());
+  GetRange(all, smallest, largest);
+}
+
+Iterator* VersionSet::MakeInputIterator(Compaction* c) {
+  ReadOptions options;
+  options.verify_checksums = options_->paranoid_checks;
+  options.fill_cache = false;
+
+  // Level-0 files have to be merged together.  For other levels,
+  // we will make a concatenating iterator per level.
+  // TODO(opt): use concatenating iterator for level-0 if there is no overlap
+  const int space = (c->level() == 0 ? c->inputs_[0].size() + 1 : 2);
+  Iterator** list = new Iterator*[space];
+  int num = 0;
+  for (int which = 0; which < 2; which++) {
+    if (!c->inputs_[which].empty()) {
+      if (c->level() + which == 0) {
+        const std::vector<FileMetaData*>& files = c->inputs_[which];
+        for (size_t i = 0; i < files.size(); i++) {
+          list[num++] = table_cache_->NewIterator(
+              options, files[i]->number, files[i]->file_size);
+        }
+      } else {
+        // Create concatenating iterator for the files from this level
+        list[num++] = NewTwoLevelIterator(
+            new Version::LevelFileNumIterator(icmp_, &c->inputs_[which]),
+            &GetFileIterator, table_cache_, options);
+      }
+    }
+  }
+  assert(num <= space);
+  Iterator* result = NewMergingIterator(&icmp_, list, num);
+  delete[] list;
+  return result;
+}
+
+Compaction* VersionSet::PickCompaction() {
+  Compaction* c;
+  int level;
+
+  // We prefer compactions triggered by too much data in a level over
+  // the compactions triggered by seeks.
+  const bool size_compaction = (current_->compaction_score_ >= 1);
+  const bool seek_compaction = (current_->file_to_compact_ != NULL);
+  if (size_compaction) {
+    level = current_->compaction_level_;
+    assert(level >= 0);
+    assert(level+1 < config::kNumLevels);
+    c = new Compaction(level);
+
+    // Pick the first file that comes after compact_pointer_[level]
+    for (size_t i = 0; i < current_->files_[level].size(); i++) {
+      FileMetaData* f = current_->files_[level][i];
+      if (compact_pointer_[level].empty() ||
+          icmp_.Compare(f->largest.Encode(), compact_pointer_[level]) > 0) {
+        c->inputs_[0].push_back(f);
+        break;
+      }
+    }
+    if (c->inputs_[0].empty()) {
+      // Wrap-around to the beginning of the key space
+      c->inputs_[0].push_back(current_->files_[level][0]);
+    }
+  } else if (seek_compaction) {
+    level = current_->file_to_compact_level_;
+    c = new Compaction(level);
+    c->inputs_[0].push_back(current_->file_to_compact_);
+  } else {
+    return NULL;
+  }
+
+  c->input_version_ = current_;
+  c->input_version_->Ref();
+
+  // Files in level 0 may overlap each other, so pick up all overlapping ones
+  if (level == 0) {
+    InternalKey smallest, largest;
+    GetRange(c->inputs_[0], &smallest, &largest);
+    // Note that the next call will discard the file we placed in
+    // c->inputs_[0] earlier and replace it with an overlapping set
+    // which will include the picked file.
+    current_->GetOverlappingInputs(0, &smallest, &largest, &c->inputs_[0]);
+    assert(!c->inputs_[0].empty());
+  }
+
+  SetupOtherInputs(c);
+
+  return c;
+}
+
+void VersionSet::SetupOtherInputs(Compaction* c) {
+  const int level = c->level();
+  InternalKey smallest, largest;
+  GetRange(c->inputs_[0], &smallest, &largest);
+
+  current_->GetOverlappingInputs(level+1, &smallest, &largest, &c->inputs_[1]);
+
+  // Get entire range covered by compaction
+  InternalKey all_start, all_limit;
+  GetRange2(c->inputs_[0], c->inputs_[1], &all_start, &all_limit);
+
+  // See if we can grow the number of inputs in "level" without
+  // changing the number of "level+1" files we pick up.
+  if (!c->inputs_[1].empty()) {
+    std::vector<FileMetaData*> expanded0;
+    current_->GetOverlappingInputs(level, &all_start, &all_limit, &expanded0);
+    const int64_t inputs0_size = TotalFileSize(c->inputs_[0]);
+    const int64_t inputs1_size = TotalFileSize(c->inputs_[1]);
+    const int64_t expanded0_size = TotalFileSize(expanded0);
+    if (expanded0.size() > c->inputs_[0].size() &&
+        inputs1_size + expanded0_size < kExpandedCompactionByteSizeLimit) {
+      InternalKey new_start, new_limit;
+      GetRange(expanded0, &new_start, &new_limit);
+      std::vector<FileMetaData*> expanded1;
+      current_->GetOverlappingInputs(level+1, &new_start, &new_limit,
+                                     &expanded1);
+      if (expanded1.size() == c->inputs_[1].size()) {
+        Log(options_->info_log,
+            "Expanding@%d %d+%d (%ld+%ld bytes) to %d+%d (%ld+%ld bytes)\n",
+            level,
+            int(c->inputs_[0].size()),
+            int(c->inputs_[1].size()),
+            long(inputs0_size), long(inputs1_size),
+            int(expanded0.size()),
+            int(expanded1.size()),
+            long(expanded0_size), long(inputs1_size));
+        smallest = new_start;
+        largest = new_limit;
+        c->inputs_[0] = expanded0;
+        c->inputs_[1] = expanded1;
+        GetRange2(c->inputs_[0], c->inputs_[1], &all_start, &all_limit);
+      }
+    }
+  }
+
+  // Compute the set of grandparent files that overlap this compaction
+  // (parent == level+1; grandparent == level+2)
+  if (level + 2 < config::kNumLevels) {
+    current_->GetOverlappingInputs(level + 2, &all_start, &all_limit,
+                                   &c->grandparents_);
+  }
+
+  if (false) {
+    Log(options_->info_log, "Compacting %d '%s' .. '%s'",
+        level,
+        smallest.DebugString().c_str(),
+        largest.DebugString().c_str());
+  }
+
+  // Update the place where we will do the next compaction for this level.
+  // We update this immediately instead of waiting for the VersionEdit
+  // to be applied so that if the compaction fails, we will try a different
+  // key range next time.
+  compact_pointer_[level] = largest.Encode().ToString();
+  c->edit_.SetCompactPointer(level, largest);
+}
+
+Compaction* VersionSet::CompactRange(
+    int level,
+    const InternalKey* begin,
+    const InternalKey* end) {
+  std::vector<FileMetaData*> inputs;
+  current_->GetOverlappingInputs(level, begin, end, &inputs);
+  if (inputs.empty()) {
+    return NULL;
+  }
+
+  // Avoid compacting too much in one shot in case the range is large.
+  // But we cannot do this for level-0 since level-0 files can overlap
+  // and we must not pick one file and drop another older file if the
+  // two files overlap.
+  if (level > 0) {
+    const uint64_t limit = MaxFileSizeForLevel(level);
+    uint64_t total = 0;
+    for (size_t i = 0; i < inputs.size(); i++) {
+      uint64_t s = inputs[i]->file_size;
+      total += s;
+      if (total >= limit) {
+        inputs.resize(i + 1);
+        break;
+      }
+    }
+  }
+
+  Compaction* c = new Compaction(level);
+  c->input_version_ = current_;
+  c->input_version_->Ref();
+  c->inputs_[0] = inputs;
+  SetupOtherInputs(c);
+  return c;
+}
+
+Compaction::Compaction(int level)
+    : level_(level),
+      max_output_file_size_(MaxFileSizeForLevel(level)),
+      input_version_(NULL),
+      grandparent_index_(0),
+      seen_key_(false),
+      overlapped_bytes_(0) {
+  for (int i = 0; i < config::kNumLevels; i++) {
+    level_ptrs_[i] = 0;
+  }
+}
+
+Compaction::~Compaction() {
+  if (input_version_ != NULL) {
+    input_version_->Unref();
+  }
+}
+
+bool Compaction::IsTrivialMove() const {
+  // Avoid a move if there is lots of overlapping grandparent data.
+  // Otherwise, the move could create a parent file that will require
+  // a very expensive merge later on.
+  return (num_input_files(0) == 1 &&
+          num_input_files(1) == 0 &&
+          TotalFileSize(grandparents_) <= kMaxGrandParentOverlapBytes);
+}
+
+void Compaction::AddInputDeletions(VersionEdit* edit) {
+  for (int which = 0; which < 2; which++) {
+    for (size_t i = 0; i < inputs_[which].size(); i++) {
+      edit->DeleteFile(level_ + which, inputs_[which][i]->number);
+    }
+  }
+}
+
+bool Compaction::IsBaseLevelForKey(const Slice& user_key) {
+  // Maybe use binary search to find right entry instead of linear search?
+  const Comparator* user_cmp = input_version_->vset_->icmp_.user_comparator();
+  for (int lvl = level_ + 2; lvl < config::kNumLevels; lvl++) {
+    const std::vector<FileMetaData*>& files = input_version_->files_[lvl];
+    for (; level_ptrs_[lvl] < files.size(); ) {
+      FileMetaData* f = files[level_ptrs_[lvl]];
+      if (user_cmp->Compare(user_key, f->largest.user_key()) <= 0) {
+        // We've advanced far enough
+        if (user_cmp->Compare(user_key, f->smallest.user_key()) >= 0) {
+          // Key falls in this file's range, so definitely not base level
+          return false;
+        }
+        break;
+      }
+      level_ptrs_[lvl]++;
+    }
+  }
+  return true;
+}
+
+bool Compaction::ShouldStopBefore(const Slice& internal_key) {
+  // Scan to find earliest grandparent file that contains key.
+  const InternalKeyComparator* icmp = &input_version_->vset_->icmp_;
+  while (grandparent_index_ < grandparents_.size() &&
+      icmp->Compare(internal_key,
+                    grandparents_[grandparent_index_]->largest.Encode()) > 0) {
+    if (seen_key_) {
+      overlapped_bytes_ += grandparents_[grandparent_index_]->file_size;
+    }
+    grandparent_index_++;
+  }
+  seen_key_ = true;
+
+  if (overlapped_bytes_ > kMaxGrandParentOverlapBytes) {
+    // Too much overlap for current output; start new output
+    overlapped_bytes_ = 0;
+    return true;
+  } else {
+    return false;
+  }
+}
+
+void Compaction::ReleaseInputs() {
+  if (input_version_ != NULL) {
+    input_version_->Unref();
+    input_version_ = NULL;
+  }
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+struct TableAndFile {
+  RandomAccessFile* file;
+  Table* table;
+};
+
+static void DeleteEntry(const Slice& key, void* value) {
+  TableAndFile* tf = reinterpret_cast<TableAndFile*>(value);
+  delete tf->table;
+  delete tf->file;
+  delete tf;
+}
+
+static void UnrefEntry(void* arg1, void* arg2) {
+  Cache* cache = reinterpret_cast<Cache*>(arg1);
+  Cache::Handle* h = reinterpret_cast<Cache::Handle*>(arg2);
+  cache->Release(h);
+}
+
+TableCache::TableCache(const std::string& dbname,
+                       const Options* options,
+                       int entries)
+    : env_(options->env),
+      dbname_(dbname),
+      options_(options),
+      cache_(NewLRUCache(entries)) {
+}
+
+TableCache::~TableCache() {
+  delete cache_;
+}
+
+Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
+                             Cache::Handle** handle) {
+  Status s;
+  char buf[sizeof(file_number)];
+  EncodeFixed64(buf, file_number);
+  Slice key(buf, sizeof(buf));
+  *handle = cache_->Lookup(key);
+  if (*handle == NULL) {
+    std::string fname = TableFileName(dbname_, file_number);
+    RandomAccessFile* file = NULL;
+    Table* table = NULL;
+    s = env_->NewRandomAccessFile(fname, &file);
+    if (!s.ok()) {
+      std::string old_fname = SSTTableFileName(dbname_, file_number);
+      if (env_->NewRandomAccessFile(old_fname, &file).ok()) {
+        s = Status::OK();
+      }
+    }
+    if (s.ok()) {
+      s = Table::Open(*options_, file, file_size, &table);
+    }
+
+    if (!s.ok()) {
+      assert(table == NULL);
+      delete file;
+      // We do not cache error results so that if the error is transient,
+      // or somebody repairs the file, we recover automatically.
+    } else {
+      TableAndFile* tf = new TableAndFile;
+      tf->file = file;
+      tf->table = table;
+      *handle = cache_->Insert(key, tf, 1, &DeleteEntry);
+    }
+  }
+  return s;
+}
+
+Iterator* TableCache::NewIterator(const ReadOptions& options,
+                                  uint64_t file_number,
+                                  uint64_t file_size,
+                                  Table** tableptr) {
+  if (tableptr != NULL) {
+    *tableptr = NULL;
+  }
+
+  Cache::Handle* handle = NULL;
+  Status s = FindTable(file_number, file_size, &handle);
+  if (!s.ok()) {
+    return NewErrorIterator(s);
+  }
+
+  Table* table = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
+  Iterator* result = table->NewIterator(options);
+  result->RegisterCleanup(&UnrefEntry, cache_, handle);
+  if (tableptr != NULL) {
+    *tableptr = table;
+  }
+  return result;
+}
+
+Status TableCache::Get(const ReadOptions& options,
+                       uint64_t file_number,
+                       uint64_t file_size,
+                       const Slice& k,
+                       void* arg,
+                       void (*saver)(void*, const Slice&, const Slice&)) {
+  Cache::Handle* handle = NULL;
+  Status s = FindTable(file_number, file_size, &handle);
+  if (s.ok()) {
+    Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
+    s = t->InternalGet(options, k, arg, saver);
+    cache_->Release(handle);
+  }
+  return s;
+}
+
+void TableCache::Evict(uint64_t file_number) {
+  char buf[sizeof(file_number)];
+  EncodeFixed64(buf, file_number);
+  cache_->Erase(Slice(buf, sizeof(buf)));
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+struct Table::Rep {
+  ~Rep() {
+    delete filter;
+    delete [] filter_data;
+    delete index_block;
+  }
+
+  Options options;
+  Status status;
+  RandomAccessFile* file;
+  uint64_t cache_id;
+  FilterBlockReader* filter;
+  const char* filter_data;
+
+  BlockHandle metaindex_handle;  // Handle to metaindex_block: saved from footer
+  Block* index_block;
+};
+
+Status Table::Open(const Options& options,
+                   RandomAccessFile* file,
+                   uint64_t size,
+                   Table** table) {
+  *table = NULL;
+  if (size < Footer::kEncodedLength) {
+    return Status::Corruption("file is too short to be an sstable");
+  }
+
+  char footer_space[Footer::kEncodedLength];
+  Slice footer_input;
+  Status s = file->Read(size - Footer::kEncodedLength, Footer::kEncodedLength,
+                        &footer_input, footer_space);
+  if (!s.ok()) return s;
+
+  Footer footer;
+  s = footer.DecodeFrom(&footer_input);
+  if (!s.ok()) return s;
+
+  // Read the index block
+  BlockContents contents;
+  Block* index_block = NULL;
+  if (s.ok()) {
+    ReadOptions opt;
+    if (options.paranoid_checks) {
+      opt.verify_checksums = true;
+    }
+    s = ReadBlock(file, opt, footer.index_handle(), &contents);
+    if (s.ok()) {
+      index_block = new Block(contents);
+    }
+  }
+
+  if (s.ok()) {
+    // We've successfully read the footer and the index block: we're
+    // ready to serve requests.
+    Rep* rep = new Table::Rep;
+    rep->options = options;
+    rep->file = file;
+    rep->metaindex_handle = footer.metaindex_handle();
+    rep->index_block = index_block;
+    rep->cache_id = (options.block_cache ? options.block_cache->NewId() : 0);
+    rep->filter_data = NULL;
+    rep->filter = NULL;
+    *table = new Table(rep);
+    (*table)->ReadMeta(footer);
+  } else {
+    delete index_block;
+  }
+
+  return s;
+}
+
+void Table::ReadMeta(const Footer& footer) {
+  if (rep_->options.filter_policy == NULL) {
+    return;  // Do not need any metadata
+  }
+
+  // TODO(sanjay): Skip this if footer.metaindex_handle() size indicates
+  // it is an empty block.
+  ReadOptions opt;
+  if (rep_->options.paranoid_checks) {
+    opt.verify_checksums = true;
+  }
+  BlockContents contents;
+  if (!ReadBlock(rep_->file, opt, footer.metaindex_handle(), &contents).ok()) {
+    // Do not propagate errors since meta info is not needed for operation
+    return;
+  }
+  Block* meta = new Block(contents);
+
+  Iterator* iter = meta->NewIterator(BytewiseComparator());
+  std::string key = "filter.";
+  key.append(rep_->options.filter_policy->Name());
+  iter->Seek(key);
+  if (iter->Valid() && iter->key() == Slice(key)) {
+    ReadFilter(iter->value());
+  }
+  delete iter;
+  delete meta;
+}
+
+void Table::ReadFilter(const Slice& filter_handle_value) {
+  Slice v = filter_handle_value;
+  BlockHandle filter_handle;
+  if (!filter_handle.DecodeFrom(&v).ok()) {
+    return;
+  }
+
+  // We might want to unify with ReadBlock() if we start
+  // requiring checksum verification in Table::Open.
+  ReadOptions opt;
+  if (rep_->options.paranoid_checks) {
+    opt.verify_checksums = true;
+  }
+  BlockContents block;
+  if (!ReadBlock(rep_->file, opt, filter_handle, &block).ok()) {
+    return;
+  }
+  if (block.heap_allocated) {
+    rep_->filter_data = block.data.data();     // Will need to delete later
+  }
+  rep_->filter = new FilterBlockReader(rep_->options.filter_policy, block.data);
+}
+
+Table::~Table() {
+  delete rep_;
+}
+
+static void DeleteBlock(void* arg, void* ignored) {
+  delete reinterpret_cast<Block*>(arg);
+}
+
+static void DeleteCachedBlock(const Slice& key, void* value) {
+  Block* block = reinterpret_cast<Block*>(value);
+  delete block;
+}
+
+static void ReleaseBlock(void* arg, void* h) {
+  Cache* cache = reinterpret_cast<Cache*>(arg);
+  Cache::Handle* handle = reinterpret_cast<Cache::Handle*>(h);
+  cache->Release(handle);
+}
+
+// Convert an index iterator value (i.e., an encoded BlockHandle)
+// into an iterator over the contents of the corresponding block.
+Iterator* Table::BlockReader(void* arg,
+                             const ReadOptions& options,
+                             const Slice& index_value) {
+  Table* table = reinterpret_cast<Table*>(arg);
+  Cache* block_cache = table->rep_->options.block_cache;
+  Block* block = NULL;
+  Cache::Handle* cache_handle = NULL;
+
+  BlockHandle handle;
+  Slice input = index_value;
+  Status s = handle.DecodeFrom(&input);
+  // We intentionally allow extra stuff in index_value so that we
+  // can add more features in the future.
+
+  if (s.ok()) {
+    BlockContents contents;
+    if (block_cache != NULL) {
+      char cache_key_buffer[16];
+      EncodeFixed64(cache_key_buffer, table->rep_->cache_id);
+      EncodeFixed64(cache_key_buffer+8, handle.offset());
+      Slice key(cache_key_buffer, sizeof(cache_key_buffer));
+      cache_handle = block_cache->Lookup(key);
+      if (cache_handle != NULL) {
+        block = reinterpret_cast<Block*>(block_cache->Value(cache_handle));
+      } else {
+        s = ReadBlock(table->rep_->file, options, handle, &contents);
+        if (s.ok()) {
+          block = new Block(contents);
+          if (contents.cachable && options.fill_cache) {
+            cache_handle = block_cache->Insert(
+                key, block, block->size(), &DeleteCachedBlock);
+          }
+        }
+      }
+    } else {
+      s = ReadBlock(table->rep_->file, options, handle, &contents);
+      if (s.ok()) {
+        block = new Block(contents);
+      }
+    }
+  }
+
+  Iterator* iter;
+  if (block != NULL) {
+    iter = block->NewIterator(table->rep_->options.comparator);
+    if (cache_handle == NULL) {
+      iter->RegisterCleanup(&DeleteBlock, block, NULL);
+    } else {
+      iter->RegisterCleanup(&ReleaseBlock, block_cache, cache_handle);
+    }
+  } else {
+    iter = NewErrorIterator(s);
+  }
+  return iter;
+}
+
+Iterator* Table::NewIterator(const ReadOptions& options) const {
+  return NewTwoLevelIterator(
+      rep_->index_block->NewIterator(rep_->options.comparator),
+      &Table::BlockReader, const_cast<Table*>(this), options);
+}
+
+Status Table::InternalGet(const ReadOptions& options, const Slice& k,
+                          void* arg,
+                          void (*saver)(void*, const Slice&, const Slice&)) {
+  Status s;
+  Iterator* iiter = rep_->index_block->NewIterator(rep_->options.comparator);
+  iiter->Seek(k);
+  if (iiter->Valid()) {
+    Slice handle_value = iiter->value();
+    FilterBlockReader* filter = rep_->filter;
+    BlockHandle handle;
+    if (filter != NULL &&
+        handle.DecodeFrom(&handle_value).ok() &&
+        !filter->KeyMayMatch(handle.offset(), k)) {
+      // Not found
+    } else {
+      Iterator* block_iter = BlockReader(this, options, iiter->value());
+      block_iter->Seek(k);
+      if (block_iter->Valid()) {
+        (*saver)(arg, block_iter->key(), block_iter->value());
+      }
+      s = block_iter->status();
+      delete block_iter;
+    }
+  }
+  if (s.ok()) {
+    s = iiter->status();
+  }
+  delete iiter;
+  return s;
+}
+
+
+uint64_t Table::ApproximateOffsetOf(const Slice& key) const {
+  Iterator* index_iter =
+      rep_->index_block->NewIterator(rep_->options.comparator);
+  index_iter->Seek(key);
+  uint64_t result;
+  if (index_iter->Valid()) {
+    BlockHandle handle;
+    Slice input = index_iter->value();
+    Status s = handle.DecodeFrom(&input);
+    if (s.ok()) {
+      result = handle.offset();
+    } else {
+      // Strange: we can't decode the block handle in the index block.
+      // We'll just return the offset of the metaindex block, which is
+      // close to the whole file size for this case.
+      result = rep_->metaindex_handle.offset();
+    }
+  } else {
+    // key is past the last key in the file.  Approximate the offset
+    // by returning the offset of the metaindex block (which is
+    // right near the end of the file).
+    result = rep_->metaindex_handle.offset();
+  }
+  delete index_iter;
+  return result;
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+inline uint32_t Block::NumRestarts() const {
+  assert(size_ >= sizeof(uint32_t));
+  return DecodeFixed32(data_ + size_ - sizeof(uint32_t));
+}
+
+Block::Block(const BlockContents& contents)
+    : data_(contents.data.data()),
+      size_(contents.data.size()),
+      owned_(contents.heap_allocated) {
+  if (size_ < sizeof(uint32_t)) {
+    size_ = 0;  // Error marker
+  } else {
+    size_t max_restarts_allowed = (size_-sizeof(uint32_t)) / sizeof(uint32_t);
+    if (NumRestarts() > max_restarts_allowed) {
+      // The size is too small for NumRestarts()
+      size_ = 0;
+    } else {
+      restart_offset_ = size_ - (1 + NumRestarts()) * sizeof(uint32_t);
+    }
+  }
+}
+
+Block::~Block() {
+  if (owned_) {
+    delete[] data_;
+  }
+}
+
+// Helper routine: decode the next block entry starting at "p",
+// storing the number of shared key bytes, non_shared key bytes,
+// and the length of the value in "*shared", "*non_shared", and
+// "*value_length", respectively.  Will not dereference past "limit".
+//
+// If any errors are detected, returns NULL.  Otherwise, returns a
+// pointer to the key delta (just past the three decoded values).
+static inline const char* DecodeEntry(const char* p, const char* limit,
+                                      uint32_t* shared,
+                                      uint32_t* non_shared,
+                                      uint32_t* value_length) {
+  if (limit - p < 3) return NULL;
+  *shared = reinterpret_cast<const unsigned char*>(p)[0];
+  *non_shared = reinterpret_cast<const unsigned char*>(p)[1];
+  *value_length = reinterpret_cast<const unsigned char*>(p)[2];
+  if ((*shared | *non_shared | *value_length) < 128) {
+    // Fast path: all three values are encoded in one byte each
+    p += 3;
+  } else {
+    if ((p = GetVarint32Ptr(p, limit, shared)) == NULL) return NULL;
+    if ((p = GetVarint32Ptr(p, limit, non_shared)) == NULL) return NULL;
+    if ((p = GetVarint32Ptr(p, limit, value_length)) == NULL) return NULL;
+  }
+
+  if (static_cast<uint32_t>(limit - p) < (*non_shared + *value_length)) {
+    return NULL;
+  }
+  return p;
+}
+
+class Block::Iter : public Iterator {
+ private:
+  const Comparator* const comparator_;
+  const char* const data_;      // underlying block contents
+  uint32_t const restarts_;     // Offset of restart array (list of fixed32)
+  uint32_t const num_restarts_; // Number of uint32_t entries in restart array
+
+  // current_ is offset in data_ of current entry.  >= restarts_ if !Valid
+  uint32_t current_;
+  uint32_t restart_index_;  // Index of restart block in which current_ falls
+  std::string key_;
+  Slice value_;
+  Status status_;
+
+  inline int Compare(const Slice& a, const Slice& b) const {
+    return comparator_->Compare(a, b);
+  }
+
+  // Return the offset in data_ just past the end of the current entry.
+  inline uint32_t NextEntryOffset() const {
+    return (value_.data() + value_.size()) - data_;
+  }
+
+  uint32_t GetRestartPoint(uint32_t index) {
+    assert(index < num_restarts_);
+    return DecodeFixed32(data_ + restarts_ + index * sizeof(uint32_t));
+  }
+
+  void SeekToRestartPoint(uint32_t index) {
+    key_.clear();
+    restart_index_ = index;
+    // current_ will be fixed by ParseNextKey();
+
+    // ParseNextKey() starts at the end of value_, so set value_ accordingly
+    uint32_t offset = GetRestartPoint(index);
+    value_ = Slice(data_ + offset, 0);
+  }
+
+ public:
+  Iter(const Comparator* comparator,
+       const char* data,
+       uint32_t restarts,
+       uint32_t num_restarts)
+      : comparator_(comparator),
+        data_(data),
+        restarts_(restarts),
+        num_restarts_(num_restarts),
+        current_(restarts_),
+        restart_index_(num_restarts_) {
+    assert(num_restarts_ > 0);
+  }
+
+  virtual bool Valid() const { return current_ < restarts_; }
+  virtual Status status() const { return status_; }
+  virtual Slice key() const {
+    assert(Valid());
+    return key_;
+  }
+  virtual Slice value() const {
+    assert(Valid());
+    return value_;
+  }
+
+  virtual void Next() {
+    assert(Valid());
+    ParseNextKey();
+  }
+
+  virtual void Prev() {
+    assert(Valid());
+
+    // Scan backwards to a restart point before current_
+    const uint32_t original = current_;
+    while (GetRestartPoint(restart_index_) >= original) {
+      if (restart_index_ == 0) {
+        // No more entries
+        current_ = restarts_;
+        restart_index_ = num_restarts_;
+        return;
+      }
+      restart_index_--;
+    }
+
+    SeekToRestartPoint(restart_index_);
+    do {
+      // Loop until end of current entry hits the start of original entry
+    } while (ParseNextKey() && NextEntryOffset() < original);
+  }
+
+  virtual void Seek(const Slice& target) {
+    // Binary search in restart array to find the last restart point
+    // with a key < target
+    uint32_t left = 0;
+    uint32_t right = num_restarts_ - 1;
+    while (left < right) {
+      uint32_t mid = (left + right + 1) / 2;
+      uint32_t region_offset = GetRestartPoint(mid);
+      uint32_t shared, non_shared, value_length;
+      const char* key_ptr = DecodeEntry(data_ + region_offset,
+                                        data_ + restarts_,
+                                        &shared, &non_shared, &value_length);
+      if (key_ptr == NULL || (shared != 0)) {
+        CorruptionError();
+        return;
+      }
+      Slice mid_key(key_ptr, non_shared);
+      if (Compare(mid_key, target) < 0) {
+        // Key at "mid" is smaller than "target".  Therefore all
+        // blocks before "mid" are uninteresting.
+        left = mid;
+      } else {
+        // Key at "mid" is >= "target".  Therefore all blocks at or
+        // after "mid" are uninteresting.
+        right = mid - 1;
+      }
+    }
+
+    // Linear search (within restart block) for first key >= target
+    SeekToRestartPoint(left);
+    while (true) {
+      if (!ParseNextKey()) {
+        return;
+      }
+      if (Compare(key_, target) >= 0) {
+        return;
+      }
+    }
+  }
+
+  virtual void SeekToFirst() {
+    SeekToRestartPoint(0);
+    ParseNextKey();
+  }
+
+  virtual void SeekToLast() {
+    SeekToRestartPoint(num_restarts_ - 1);
+    while (ParseNextKey() && NextEntryOffset() < restarts_) {
+      // Keep skipping
+    }
+  }
+
+ private:
+  void CorruptionError() {
+    current_ = restarts_;
+    restart_index_ = num_restarts_;
+    status_ = Status::Corruption("bad entry in block");
+    key_.clear();
+    value_.clear();
+  }
+
+  bool ParseNextKey() {
+    current_ = NextEntryOffset();
+    const char* p = data_ + current_;
+    const char* limit = data_ + restarts_;  // Restarts come right after data
+    if (p >= limit) {
+      // No more entries to return.  Mark as invalid.
+      current_ = restarts_;
+      restart_index_ = num_restarts_;
+      return false;
+    }
+
+    // Decode next entry
+    uint32_t shared, non_shared, value_length;
+    p = DecodeEntry(p, limit, &shared, &non_shared, &value_length);
+    if (p == NULL || key_.size() < shared) {
+      CorruptionError();
+      return false;
+    } else {
+      key_.resize(shared);
+      key_.append(p, non_shared);
+      value_ = Slice(p + non_shared, value_length);
+      while (restart_index_ + 1 < num_restarts_ &&
+             GetRestartPoint(restart_index_ + 1) < current_) {
+        ++restart_index_;
+      }
+      return true;
+    }
+  }
+};
+
+Iterator* Block::NewIterator(const Comparator* cmp) {
+  if (size_ < sizeof(uint32_t)) {
+    return NewErrorIterator(Status::Corruption("bad block contents"));
+  }
+  const uint32_t num_restarts = NumRestarts();
+  if (num_restarts == 0) {
+    return NewEmptyIterator();
+  } else {
+    return new Iter(cmp, data_, restart_offset_, num_restarts);
+  }
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+// A utility routine: write "data" to the named file and Sync() it.
+extern Status WriteStringToFileSync(Env* env, const Slice& data,
+                                    const std::string& fname);
+
+static std::string MakeFileName(const std::string& name, uint64_t number,
+                                const char* suffix) {
+  char buf[100];
+  snprintf(buf, sizeof(buf), "/%06llu.%s",
+           static_cast<unsigned long long>(number),
+           suffix);
+  return name + buf;
+}
+
+std::string LogFileName(const std::string& name, uint64_t number) {
+  assert(number > 0);
+  return MakeFileName(name, number, "log");
+}
+
+std::string TableFileName(const std::string& name, uint64_t number) {
+  assert(number > 0);
+  return MakeFileName(name, number, "ldb");
+}
+
+std::string SSTTableFileName(const std::string& name, uint64_t number) {
+  assert(number > 0);
+  return MakeFileName(name, number, "sst");
+}
+
+std::string DescriptorFileName(const std::string& dbname, uint64_t number) {
+  assert(number > 0);
+  char buf[100];
+  snprintf(buf, sizeof(buf), "/MANIFEST-%06llu",
+           static_cast<unsigned long long>(number));
+  return dbname + buf;
+}
+
+std::string CurrentFileName(const std::string& dbname) {
+  return dbname + "/CURRENT";
+}
+
+std::string LockFileName(const std::string& dbname) {
+  return dbname + "/LOCK";
+}
+
+std::string TempFileName(const std::string& dbname, uint64_t number) {
+  assert(number > 0);
+  return MakeFileName(dbname, number, "dbtmp");
+}
+
+std::string InfoLogFileName(const std::string& dbname) {
+  return dbname + "/LOG";
+}
+
+// Return the name of the old info log file for "dbname".
+std::string OldInfoLogFileName(const std::string& dbname) {
+  return dbname + "/LOG.old";
+}
+
+
+// Owned filenames have the form:
+//    dbname/CURRENT
+//    dbname/LOCK
+//    dbname/LOG
+//    dbname/LOG.old
+//    dbname/MANIFEST-[0-9]+
+//    dbname/[0-9]+.(log|sst|ldb)
+bool ParseFileName(const std::string& fname,
+                   uint64_t* number,
+                   FileType* type) {
+  Slice rest(fname);
+  if (rest == "CURRENT") {
+    *number = 0;
+    *type = kCurrentFile;
+  } else if (rest == "LOCK") {
+    *number = 0;
+    *type = kDBLockFile;
+  } else if (rest == "LOG" || rest == "LOG.old") {
+    *number = 0;
+    *type = kInfoLogFile;
+  } else if (rest.starts_with("MANIFEST-")) {
+    rest.remove_prefix(strlen("MANIFEST-"));
+    uint64_t num;
+    if (!ConsumeDecimalNumber(&rest, &num)) {
+      return false;
+    }
+    if (!rest.empty()) {
+      return false;
+    }
+    *type = kDescriptorFile;
+    *number = num;
+  } else {
+    // Avoid strtoull() to keep filename format independent of the
+    // current locale
+    uint64_t num;
+    if (!ConsumeDecimalNumber(&rest, &num)) {
+      return false;
+    }
+    Slice suffix = rest;
+    if (suffix == Slice(".log")) {
+      *type = kLogFile;
+    } else if (suffix == Slice(".sst") || suffix == Slice(".ldb")) {
+      *type = kTableFile;
+    } else if (suffix == Slice(".dbtmp")) {
+      *type = kTempFile;
+    } else {
+      return false;
+    }
+    *number = num;
+  }
+  return true;
+}
+
+Status SetCurrentFile(Env* env, const std::string& dbname,
+                      uint64_t descriptor_number) {
+  // Remove leading "dbname/" and add newline to manifest file name
+  std::string manifest = DescriptorFileName(dbname, descriptor_number);
+  Slice contents = manifest;
+  assert(contents.starts_with(dbname + "/"));
+  contents.remove_prefix(dbname.size() + 1);
+  std::string tmp = TempFileName(dbname, descriptor_number);
+  Status s = WriteStringToFileSync(env, contents.ToString() + "\n", tmp);
+  if (s.ok()) {
+    s = env->RenameFile(tmp, CurrentFileName(dbname));
+  }
+  if (!s.ok()) {
+    env->DeleteFile(tmp);
+  }
+  return s;
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+namespace log {
+
+static void InitTypeCrc(uint32_t* type_crc) {
+  for (int i = 0; i <= kMaxRecordType; i++) {
+    char t = static_cast<char>(i);
+    type_crc[i] = crc32c::Value(&t, 1);
+  }
+}
+
+Writer::Writer(WritableFile* dest)
+    : dest_(dest),
+      block_offset_(0) {
+  InitTypeCrc(type_crc_);
+}
+
+Writer::Writer(WritableFile* dest, uint64_t dest_length)
+    : dest_(dest), block_offset_(dest_length % kBlockSize) {
+  InitTypeCrc(type_crc_);
+}
+
+Writer::~Writer() {
+}
+
+Status Writer::AddRecord(const Slice& slice) {
+  const char* ptr = slice.data();
+  size_t left = slice.size();
+
+  // Fragment the record if necessary and emit it.  Note that if slice
+  // is empty, we still want to iterate once to emit a single
+  // zero-length record
+  Status s;
+  bool begin = true;
+  do {
+    const int leftover = kBlockSize - block_offset_;
+    assert(leftover >= 0);
+    if (leftover < kHeaderSize) {
+      // Switch to a new block
+      if (leftover > 0) {
+        // Fill the trailer (literal below relies on kHeaderSize being 7)
+        assert(kHeaderSize == 7);
+        dest_->Append(Slice("\x00\x00\x00\x00\x00\x00", leftover));
+      }
+      block_offset_ = 0;
+    }
+
+    // Invariant: we never leave < kHeaderSize bytes in a block.
+    assert(kBlockSize - block_offset_ - kHeaderSize >= 0);
+
+    const size_t avail = kBlockSize - block_offset_ - kHeaderSize;
+    const size_t fragment_length = (left < avail) ? left : avail;
+
+    RecordType type;
+    const bool end = (left == fragment_length);
+    if (begin && end) {
+      type = kFullType;
+    } else if (begin) {
+      type = kFirstType;
+    } else if (end) {
+      type = kLastType;
+    } else {
+      type = kMiddleType;
+    }
+
+    s = EmitPhysicalRecord(type, ptr, fragment_length);
+    ptr += fragment_length;
+    left -= fragment_length;
+    begin = false;
+  } while (s.ok() && left > 0);
+  return s;
+}
+
+Status Writer::EmitPhysicalRecord(RecordType t, const char* ptr, size_t n) {
+  assert(n <= 0xffff);  // Must fit in two bytes
+  assert(block_offset_ + kHeaderSize + n <= kBlockSize);
+
+  // Format the header
+  char buf[kHeaderSize];
+  buf[4] = static_cast<char>(n & 0xff);
+  buf[5] = static_cast<char>(n >> 8);
+  buf[6] = static_cast<char>(t);
+
+  // Compute the crc of the record type and the payload.
+  uint32_t crc = crc32c::Extend(type_crc_[t], ptr, n);
+  crc = crc32c::Mask(crc);                 // Adjust for storage
+  EncodeFixed32(buf, crc);
+
+  // Write the header and the payload
+  Status s = dest_->Append(Slice(buf, kHeaderSize));
+  if (s.ok()) {
+    s = dest_->Append(Slice(ptr, n));
+    if (s.ok()) {
+      s = dest_->Flush();
+    }
+  }
+  block_offset_ += kHeaderSize + n;
+  return s;
+}
+
+}  // namespace log
+}  // namespace leveldb
+
+namespace leveldb {
+namespace crc32c {
+
+static const uint32_t table0_[256] = {
+  0x00000000, 0xf26b8303, 0xe13b70f7, 0x1350f3f4,
+  0xc79a971f, 0x35f1141c, 0x26a1e7e8, 0xd4ca64eb,
+  0x8ad958cf, 0x78b2dbcc, 0x6be22838, 0x9989ab3b,
+  0x4d43cfd0, 0xbf284cd3, 0xac78bf27, 0x5e133c24,
+  0x105ec76f, 0xe235446c, 0xf165b798, 0x030e349b,
+  0xd7c45070, 0x25afd373, 0x36ff2087, 0xc494a384,
+  0x9a879fa0, 0x68ec1ca3, 0x7bbcef57, 0x89d76c54,
+  0x5d1d08bf, 0xaf768bbc, 0xbc267848, 0x4e4dfb4b,
+  0x20bd8ede, 0xd2d60ddd, 0xc186fe29, 0x33ed7d2a,
+  0xe72719c1, 0x154c9ac2, 0x061c6936, 0xf477ea35,
+  0xaa64d611, 0x580f5512, 0x4b5fa6e6, 0xb93425e5,
+  0x6dfe410e, 0x9f95c20d, 0x8cc531f9, 0x7eaeb2fa,
+  0x30e349b1, 0xc288cab2, 0xd1d83946, 0x23b3ba45,
+  0xf779deae, 0x05125dad, 0x1642ae59, 0xe4292d5a,
+  0xba3a117e, 0x4851927d, 0x5b016189, 0xa96ae28a,
+  0x7da08661, 0x8fcb0562, 0x9c9bf696, 0x6ef07595,
+  0x417b1dbc, 0xb3109ebf, 0xa0406d4b, 0x522bee48,
+  0x86e18aa3, 0x748a09a0, 0x67dafa54, 0x95b17957,
+  0xcba24573, 0x39c9c670, 0x2a993584, 0xd8f2b687,
+  0x0c38d26c, 0xfe53516f, 0xed03a29b, 0x1f682198,
+  0x5125dad3, 0xa34e59d0, 0xb01eaa24, 0x42752927,
+  0x96bf4dcc, 0x64d4cecf, 0x77843d3b, 0x85efbe38,
+  0xdbfc821c, 0x2997011f, 0x3ac7f2eb, 0xc8ac71e8,
+  0x1c661503, 0xee0d9600, 0xfd5d65f4, 0x0f36e6f7,
+  0x61c69362, 0x93ad1061, 0x80fde395, 0x72966096,
+  0xa65c047d, 0x5437877e, 0x4767748a, 0xb50cf789,
+  0xeb1fcbad, 0x197448ae, 0x0a24bb5a, 0xf84f3859,
+  0x2c855cb2, 0xdeeedfb1, 0xcdbe2c45, 0x3fd5af46,
+  0x7198540d, 0x83f3d70e, 0x90a324fa, 0x62c8a7f9,
+  0xb602c312, 0x44694011, 0x5739b3e5, 0xa55230e6,
+  0xfb410cc2, 0x092a8fc1, 0x1a7a7c35, 0xe811ff36,
+  0x3cdb9bdd, 0xceb018de, 0xdde0eb2a, 0x2f8b6829,
+  0x82f63b78, 0x709db87b, 0x63cd4b8f, 0x91a6c88c,
+  0x456cac67, 0xb7072f64, 0xa457dc90, 0x563c5f93,
+  0x082f63b7, 0xfa44e0b4, 0xe9141340, 0x1b7f9043,
+  0xcfb5f4a8, 0x3dde77ab, 0x2e8e845f, 0xdce5075c,
+  0x92a8fc17, 0x60c37f14, 0x73938ce0, 0x81f80fe3,
+  0x55326b08, 0xa759e80b, 0xb4091bff, 0x466298fc,
+  0x1871a4d8, 0xea1a27db, 0xf94ad42f, 0x0b21572c,
+  0xdfeb33c7, 0x2d80b0c4, 0x3ed04330, 0xccbbc033,
+  0xa24bb5a6, 0x502036a5, 0x4370c551, 0xb11b4652,
+  0x65d122b9, 0x97baa1ba, 0x84ea524e, 0x7681d14d,
+  0x2892ed69, 0xdaf96e6a, 0xc9a99d9e, 0x3bc21e9d,
+  0xef087a76, 0x1d63f975, 0x0e330a81, 0xfc588982,
+  0xb21572c9, 0x407ef1ca, 0x532e023e, 0xa145813d,
+  0x758fe5d6, 0x87e466d5, 0x94b49521, 0x66df1622,
+  0x38cc2a06, 0xcaa7a905, 0xd9f75af1, 0x2b9cd9f2,
+  0xff56bd19, 0x0d3d3e1a, 0x1e6dcdee, 0xec064eed,
+  0xc38d26c4, 0x31e6a5c7, 0x22b65633, 0xd0ddd530,
+  0x0417b1db, 0xf67c32d8, 0xe52cc12c, 0x1747422f,
+  0x49547e0b, 0xbb3ffd08, 0xa86f0efc, 0x5a048dff,
+  0x8ecee914, 0x7ca56a17, 0x6ff599e3, 0x9d9e1ae0,
+  0xd3d3e1ab, 0x21b862a8, 0x32e8915c, 0xc083125f,
+  0x144976b4, 0xe622f5b7, 0xf5720643, 0x07198540,
+  0x590ab964, 0xab613a67, 0xb831c993, 0x4a5a4a90,
+  0x9e902e7b, 0x6cfbad78, 0x7fab5e8c, 0x8dc0dd8f,
+  0xe330a81a, 0x115b2b19, 0x020bd8ed, 0xf0605bee,
+  0x24aa3f05, 0xd6c1bc06, 0xc5914ff2, 0x37faccf1,
+  0x69e9f0d5, 0x9b8273d6, 0x88d28022, 0x7ab90321,
+  0xae7367ca, 0x5c18e4c9, 0x4f48173d, 0xbd23943e,
+  0xf36e6f75, 0x0105ec76, 0x12551f82, 0xe03e9c81,
+  0x34f4f86a, 0xc69f7b69, 0xd5cf889d, 0x27a40b9e,
+  0x79b737ba, 0x8bdcb4b9, 0x988c474d, 0x6ae7c44e,
+  0xbe2da0a5, 0x4c4623a6, 0x5f16d052, 0xad7d5351
+};
+static const uint32_t table1_[256] = {
+  0x00000000, 0x13a29877, 0x274530ee, 0x34e7a899,
+  0x4e8a61dc, 0x5d28f9ab, 0x69cf5132, 0x7a6dc945,
+  0x9d14c3b8, 0x8eb65bcf, 0xba51f356, 0xa9f36b21,
+  0xd39ea264, 0xc03c3a13, 0xf4db928a, 0xe7790afd,
+  0x3fc5f181, 0x2c6769f6, 0x1880c16f, 0x0b225918,
+  0x714f905d, 0x62ed082a, 0x560aa0b3, 0x45a838c4,
+  0xa2d13239, 0xb173aa4e, 0x859402d7, 0x96369aa0,
+  0xec5b53e5, 0xfff9cb92, 0xcb1e630b, 0xd8bcfb7c,
+  0x7f8be302, 0x6c297b75, 0x58ced3ec, 0x4b6c4b9b,
+  0x310182de, 0x22a31aa9, 0x1644b230, 0x05e62a47,
+  0xe29f20ba, 0xf13db8cd, 0xc5da1054, 0xd6788823,
+  0xac154166, 0xbfb7d911, 0x8b507188, 0x98f2e9ff,
+  0x404e1283, 0x53ec8af4, 0x670b226d, 0x74a9ba1a,
+  0x0ec4735f, 0x1d66eb28, 0x298143b1, 0x3a23dbc6,
+  0xdd5ad13b, 0xcef8494c, 0xfa1fe1d5, 0xe9bd79a2,
+  0x93d0b0e7, 0x80722890, 0xb4958009, 0xa737187e,
+  0xff17c604, 0xecb55e73, 0xd852f6ea, 0xcbf06e9d,
+  0xb19da7d8, 0xa23f3faf, 0x96d89736, 0x857a0f41,
+  0x620305bc, 0x71a19dcb, 0x45463552, 0x56e4ad25,
+  0x2c896460, 0x3f2bfc17, 0x0bcc548e, 0x186eccf9,
+  0xc0d23785, 0xd370aff2, 0xe797076b, 0xf4359f1c,
+  0x8e585659, 0x9dface2e, 0xa91d66b7, 0xbabffec0,
+  0x5dc6f43d, 0x4e646c4a, 0x7a83c4d3, 0x69215ca4,
+  0x134c95e1, 0x00ee0d96, 0x3409a50f, 0x27ab3d78,
+  0x809c2506, 0x933ebd71, 0xa7d915e8, 0xb47b8d9f,
+  0xce1644da, 0xddb4dcad, 0xe9537434, 0xfaf1ec43,
+  0x1d88e6be, 0x0e2a7ec9, 0x3acdd650, 0x296f4e27,
+  0x53028762, 0x40a01f15, 0x7447b78c, 0x67e52ffb,
+  0xbf59d487, 0xacfb4cf0, 0x981ce469, 0x8bbe7c1e,
+  0xf1d3b55b, 0xe2712d2c, 0xd69685b5, 0xc5341dc2,
+  0x224d173f, 0x31ef8f48, 0x050827d1, 0x16aabfa6,
+  0x6cc776e3, 0x7f65ee94, 0x4b82460d, 0x5820de7a,
+  0xfbc3faf9, 0xe861628e, 0xdc86ca17, 0xcf245260,
+  0xb5499b25, 0xa6eb0352, 0x920cabcb, 0x81ae33bc,
+  0x66d73941, 0x7575a136, 0x419209af, 0x523091d8,
+  0x285d589d, 0x3bffc0ea, 0x0f186873, 0x1cbaf004,
+  0xc4060b78, 0xd7a4930f, 0xe3433b96, 0xf0e1a3e1,
+  0x8a8c6aa4, 0x992ef2d3, 0xadc95a4a, 0xbe6bc23d,
+  0x5912c8c0, 0x4ab050b7, 0x7e57f82e, 0x6df56059,
+  0x1798a91c, 0x043a316b, 0x30dd99f2, 0x237f0185,
+  0x844819fb, 0x97ea818c, 0xa30d2915, 0xb0afb162,
+  0xcac27827, 0xd960e050, 0xed8748c9, 0xfe25d0be,
+  0x195cda43, 0x0afe4234, 0x3e19eaad, 0x2dbb72da,
+  0x57d6bb9f, 0x447423e8, 0x70938b71, 0x63311306,
+  0xbb8de87a, 0xa82f700d, 0x9cc8d894, 0x8f6a40e3,
+  0xf50789a6, 0xe6a511d1, 0xd242b948, 0xc1e0213f,
+  0x26992bc2, 0x353bb3b5, 0x01dc1b2c, 0x127e835b,
+  0x68134a1e, 0x7bb1d269, 0x4f567af0, 0x5cf4e287,
+  0x04d43cfd, 0x1776a48a, 0x23910c13, 0x30339464,
+  0x4a5e5d21, 0x59fcc556, 0x6d1b6dcf, 0x7eb9f5b8,
+  0x99c0ff45, 0x8a626732, 0xbe85cfab, 0xad2757dc,
+  0xd74a9e99, 0xc4e806ee, 0xf00fae77, 0xe3ad3600,
+  0x3b11cd7c, 0x28b3550b, 0x1c54fd92, 0x0ff665e5,
+  0x759baca0, 0x663934d7, 0x52de9c4e, 0x417c0439,
+  0xa6050ec4, 0xb5a796b3, 0x81403e2a, 0x92e2a65d,
+  0xe88f6f18, 0xfb2df76f, 0xcfca5ff6, 0xdc68c781,
+  0x7b5fdfff, 0x68fd4788, 0x5c1aef11, 0x4fb87766,
+  0x35d5be23, 0x26772654, 0x12908ecd, 0x013216ba,
+  0xe64b1c47, 0xf5e98430, 0xc10e2ca9, 0xd2acb4de,
+  0xa8c17d9b, 0xbb63e5ec, 0x8f844d75, 0x9c26d502,
+  0x449a2e7e, 0x5738b609, 0x63df1e90, 0x707d86e7,
+  0x0a104fa2, 0x19b2d7d5, 0x2d557f4c, 0x3ef7e73b,
+  0xd98eedc6, 0xca2c75b1, 0xfecbdd28, 0xed69455f,
+  0x97048c1a, 0x84a6146d, 0xb041bcf4, 0xa3e32483
+};
+static const uint32_t table2_[256] = {
+  0x00000000, 0xa541927e, 0x4f6f520d, 0xea2ec073,
+  0x9edea41a, 0x3b9f3664, 0xd1b1f617, 0x74f06469,
+  0x38513ec5, 0x9d10acbb, 0x773e6cc8, 0xd27ffeb6,
+  0xa68f9adf, 0x03ce08a1, 0xe9e0c8d2, 0x4ca15aac,
+  0x70a27d8a, 0xd5e3eff4, 0x3fcd2f87, 0x9a8cbdf9,
+  0xee7cd990, 0x4b3d4bee, 0xa1138b9d, 0x045219e3,
+  0x48f3434f, 0xedb2d131, 0x079c1142, 0xa2dd833c,
+  0xd62de755, 0x736c752b, 0x9942b558, 0x3c032726,
+  0xe144fb14, 0x4405696a, 0xae2ba919, 0x0b6a3b67,
+  0x7f9a5f0e, 0xdadbcd70, 0x30f50d03, 0x95b49f7d,
+  0xd915c5d1, 0x7c5457af, 0x967a97dc, 0x333b05a2,
+  0x47cb61cb, 0xe28af3b5, 0x08a433c6, 0xade5a1b8,
+  0x91e6869e, 0x34a714e0, 0xde89d493, 0x7bc846ed,
+  0x0f382284, 0xaa79b0fa, 0x40577089, 0xe516e2f7,
+  0xa9b7b85b, 0x0cf62a25, 0xe6d8ea56, 0x43997828,
+  0x37691c41, 0x92288e3f, 0x78064e4c, 0xdd47dc32,
+  0xc76580d9, 0x622412a7, 0x880ad2d4, 0x2d4b40aa,
+  0x59bb24c3, 0xfcfab6bd, 0x16d476ce, 0xb395e4b0,
+  0xff34be1c, 0x5a752c62, 0xb05bec11, 0x151a7e6f,
+  0x61ea1a06, 0xc4ab8878, 0x2e85480b, 0x8bc4da75,
+  0xb7c7fd53, 0x12866f2d, 0xf8a8af5e, 0x5de93d20,
+  0x29195949, 0x8c58cb37, 0x66760b44, 0xc337993a,
+  0x8f96c396, 0x2ad751e8, 0xc0f9919b, 0x65b803e5,
+  0x1148678c, 0xb409f5f2, 0x5e273581, 0xfb66a7ff,
+  0x26217bcd, 0x8360e9b3, 0x694e29c0, 0xcc0fbbbe,
+  0xb8ffdfd7, 0x1dbe4da9, 0xf7908dda, 0x52d11fa4,
+  0x1e704508, 0xbb31d776, 0x511f1705, 0xf45e857b,
+  0x80aee112, 0x25ef736c, 0xcfc1b31f, 0x6a802161,
+  0x56830647, 0xf3c29439, 0x19ec544a, 0xbcadc634,
+  0xc85da25d, 0x6d1c3023, 0x8732f050, 0x2273622e,
+  0x6ed23882, 0xcb93aafc, 0x21bd6a8f, 0x84fcf8f1,
+  0xf00c9c98, 0x554d0ee6, 0xbf63ce95, 0x1a225ceb,
+  0x8b277743, 0x2e66e53d, 0xc448254e, 0x6109b730,
+  0x15f9d359, 0xb0b84127, 0x5a968154, 0xffd7132a,
+  0xb3764986, 0x1637dbf8, 0xfc191b8b, 0x595889f5,
+  0x2da8ed9c, 0x88e97fe2, 0x62c7bf91, 0xc7862def,
+  0xfb850ac9, 0x5ec498b7, 0xb4ea58c4, 0x11abcaba,
+  0x655baed3, 0xc01a3cad, 0x2a34fcde, 0x8f756ea0,
+  0xc3d4340c, 0x6695a672, 0x8cbb6601, 0x29faf47f,
+  0x5d0a9016, 0xf84b0268, 0x1265c21b, 0xb7245065,
+  0x6a638c57, 0xcf221e29, 0x250cde5a, 0x804d4c24,
+  0xf4bd284d, 0x51fcba33, 0xbbd27a40, 0x1e93e83e,
+  0x5232b292, 0xf77320ec, 0x1d5de09f, 0xb81c72e1,
+  0xccec1688, 0x69ad84f6, 0x83834485, 0x26c2d6fb,
+  0x1ac1f1dd, 0xbf8063a3, 0x55aea3d0, 0xf0ef31ae,
+  0x841f55c7, 0x215ec7b9, 0xcb7007ca, 0x6e3195b4,
+  0x2290cf18, 0x87d15d66, 0x6dff9d15, 0xc8be0f6b,
+  0xbc4e6b02, 0x190ff97c, 0xf321390f, 0x5660ab71,
+  0x4c42f79a, 0xe90365e4, 0x032da597, 0xa66c37e9,
+  0xd29c5380, 0x77ddc1fe, 0x9df3018d, 0x38b293f3,
+  0x7413c95f, 0xd1525b21, 0x3b7c9b52, 0x9e3d092c,
+  0xeacd6d45, 0x4f8cff3b, 0xa5a23f48, 0x00e3ad36,
+  0x3ce08a10, 0x99a1186e, 0x738fd81d, 0xd6ce4a63,
+  0xa23e2e0a, 0x077fbc74, 0xed517c07, 0x4810ee79,
+  0x04b1b4d5, 0xa1f026ab, 0x4bdee6d8, 0xee9f74a6,
+  0x9a6f10cf, 0x3f2e82b1, 0xd50042c2, 0x7041d0bc,
+  0xad060c8e, 0x08479ef0, 0xe2695e83, 0x4728ccfd,
+  0x33d8a894, 0x96993aea, 0x7cb7fa99, 0xd9f668e7,
+  0x9557324b, 0x3016a035, 0xda386046, 0x7f79f238,
+  0x0b899651, 0xaec8042f, 0x44e6c45c, 0xe1a75622,
+  0xdda47104, 0x78e5e37a, 0x92cb2309, 0x378ab177,
+  0x437ad51e, 0xe63b4760, 0x0c158713, 0xa954156d,
+  0xe5f54fc1, 0x40b4ddbf, 0xaa9a1dcc, 0x0fdb8fb2,
+  0x7b2bebdb, 0xde6a79a5, 0x3444b9d6, 0x91052ba8
+};
+static const uint32_t table3_[256] = {
+  0x00000000, 0xdd45aab8, 0xbf672381, 0x62228939,
+  0x7b2231f3, 0xa6679b4b, 0xc4451272, 0x1900b8ca,
+  0xf64463e6, 0x2b01c95e, 0x49234067, 0x9466eadf,
+  0x8d665215, 0x5023f8ad, 0x32017194, 0xef44db2c,
+  0xe964b13d, 0x34211b85, 0x560392bc, 0x8b463804,
+  0x924680ce, 0x4f032a76, 0x2d21a34f, 0xf06409f7,
+  0x1f20d2db, 0xc2657863, 0xa047f15a, 0x7d025be2,
+  0x6402e328, 0xb9474990, 0xdb65c0a9, 0x06206a11,
+  0xd725148b, 0x0a60be33, 0x6842370a, 0xb5079db2,
+  0xac072578, 0x71428fc0, 0x136006f9, 0xce25ac41,
+  0x2161776d, 0xfc24ddd5, 0x9e0654ec, 0x4343fe54,
+  0x5a43469e, 0x8706ec26, 0xe524651f, 0x3861cfa7,
+  0x3e41a5b6, 0xe3040f0e, 0x81268637, 0x5c632c8f,
+  0x45639445, 0x98263efd, 0xfa04b7c4, 0x27411d7c,
+  0xc805c650, 0x15406ce8, 0x7762e5d1, 0xaa274f69,
+  0xb327f7a3, 0x6e625d1b, 0x0c40d422, 0xd1057e9a,
+  0xaba65fe7, 0x76e3f55f, 0x14c17c66, 0xc984d6de,
+  0xd0846e14, 0x0dc1c4ac, 0x6fe34d95, 0xb2a6e72d,
+  0x5de23c01, 0x80a796b9, 0xe2851f80, 0x3fc0b538,
+  0x26c00df2, 0xfb85a74a, 0x99a72e73, 0x44e284cb,
+  0x42c2eeda, 0x9f874462, 0xfda5cd5b, 0x20e067e3,
+  0x39e0df29, 0xe4a57591, 0x8687fca8, 0x5bc25610,
+  0xb4868d3c, 0x69c32784, 0x0be1aebd, 0xd6a40405,
+  0xcfa4bccf, 0x12e11677, 0x70c39f4e, 0xad8635f6,
+  0x7c834b6c, 0xa1c6e1d4, 0xc3e468ed, 0x1ea1c255,
+  0x07a17a9f, 0xdae4d027, 0xb8c6591e, 0x6583f3a6,
+  0x8ac7288a, 0x57828232, 0x35a00b0b, 0xe8e5a1b3,
+  0xf1e51979, 0x2ca0b3c1, 0x4e823af8, 0x93c79040,
+  0x95e7fa51, 0x48a250e9, 0x2a80d9d0, 0xf7c57368,
+  0xeec5cba2, 0x3380611a, 0x51a2e823, 0x8ce7429b,
+  0x63a399b7, 0xbee6330f, 0xdcc4ba36, 0x0181108e,
+  0x1881a844, 0xc5c402fc, 0xa7e68bc5, 0x7aa3217d,
+  0x52a0c93f, 0x8fe56387, 0xedc7eabe, 0x30824006,
+  0x2982f8cc, 0xf4c75274, 0x96e5db4d, 0x4ba071f5,
+  0xa4e4aad9, 0x79a10061, 0x1b838958, 0xc6c623e0,
+  0xdfc69b2a, 0x02833192, 0x60a1b8ab, 0xbde41213,
+  0xbbc47802, 0x6681d2ba, 0x04a35b83, 0xd9e6f13b,
+  0xc0e649f1, 0x1da3e349, 0x7f816a70, 0xa2c4c0c8,
+  0x4d801be4, 0x90c5b15c, 0xf2e73865, 0x2fa292dd,
+  0x36a22a17, 0xebe780af, 0x89c50996, 0x5480a32e,
+  0x8585ddb4, 0x58c0770c, 0x3ae2fe35, 0xe7a7548d,
+  0xfea7ec47, 0x23e246ff, 0x41c0cfc6, 0x9c85657e,
+  0x73c1be52, 0xae8414ea, 0xcca69dd3, 0x11e3376b,
+  0x08e38fa1, 0xd5a62519, 0xb784ac20, 0x6ac10698,
+  0x6ce16c89, 0xb1a4c631, 0xd3864f08, 0x0ec3e5b0,
+  0x17c35d7a, 0xca86f7c2, 0xa8a47efb, 0x75e1d443,
+  0x9aa50f6f, 0x47e0a5d7, 0x25c22cee, 0xf8878656,
+  0xe1873e9c, 0x3cc29424, 0x5ee01d1d, 0x83a5b7a5,
+  0xf90696d8, 0x24433c60, 0x4661b559, 0x9b241fe1,
+  0x8224a72b, 0x5f610d93, 0x3d4384aa, 0xe0062e12,
+  0x0f42f53e, 0xd2075f86, 0xb025d6bf, 0x6d607c07,
+  0x7460c4cd, 0xa9256e75, 0xcb07e74c, 0x16424df4,
+  0x106227e5, 0xcd278d5d, 0xaf050464, 0x7240aedc,
+  0x6b401616, 0xb605bcae, 0xd4273597, 0x09629f2f,
+  0xe6264403, 0x3b63eebb, 0x59416782, 0x8404cd3a,
+  0x9d0475f0, 0x4041df48, 0x22635671, 0xff26fcc9,
+  0x2e238253, 0xf36628eb, 0x9144a1d2, 0x4c010b6a,
+  0x5501b3a0, 0x88441918, 0xea669021, 0x37233a99,
+  0xd867e1b5, 0x05224b0d, 0x6700c234, 0xba45688c,
+  0xa345d046, 0x7e007afe, 0x1c22f3c7, 0xc167597f,
+  0xc747336e, 0x1a0299d6, 0x782010ef, 0xa565ba57,
+  0xbc65029d, 0x6120a825, 0x0302211c, 0xde478ba4,
+  0x31035088, 0xec46fa30, 0x8e647309, 0x5321d9b1,
+  0x4a21617b, 0x9764cbc3, 0xf54642fa, 0x2803e842
+};
+
+// Used to fetch a naturally-aligned 32-bit word in little endian byte-order
+static inline uint32_t LE_LOAD32(const uint8_t *p) {
+  return DecodeFixed32(reinterpret_cast<const char*>(p));
+}
+
+uint32_t Extend(uint32_t crc, const char* buf, size_t size) {
+  const uint8_t *p = reinterpret_cast<const uint8_t *>(buf);
+  const uint8_t *e = p + size;
+  uint32_t l = crc ^ 0xffffffffu;
+
+#define STEP1 do {                              \
+    int c = (l & 0xff) ^ *p++;                  \
+    l = table0_[c] ^ (l >> 8);                  \
+} while (0)
+#define STEP4 do {                              \
+    uint32_t c = l ^ LE_LOAD32(p);              \
+    p += 4;                                     \
+    l = table3_[c & 0xff] ^                     \
+        table2_[(c >> 8) & 0xff] ^              \
+        table1_[(c >> 16) & 0xff] ^             \
+        table0_[c >> 24];                       \
+} while (0)
+
+  // Point x at first 4-byte aligned byte in string.  This might be
+  // just past the end of the string.
+  const uintptr_t pval = reinterpret_cast<uintptr_t>(p);
+  const uint8_t* x = reinterpret_cast<const uint8_t*>(((pval + 3) >> 2) << 2);
+  if (x <= e) {
+    // Process bytes until finished or p is 4-byte aligned
+    while (p != x) {
+      STEP1;
+    }
+  }
+  // Process bytes 16 at a time
+  while ((e-p) >= 16) {
+    STEP4; STEP4; STEP4; STEP4;
+  }
+  // Process bytes 4 at a time
+  while ((e-p) >= 4) {
+    STEP4;
+  }
+  // Process the last few bytes
+  while (p != e) {
+    STEP1;
+  }
+#undef STEP4
+#undef STEP1
+  return l ^ 0xffffffffu;
+}
+
+}  // namespace crc32c
+}  // namespace leveldb
+
+namespace leveldb {
+
+void BlockHandle::EncodeTo(std::string* dst) const {
+  // Sanity check that all fields have been set
+  assert(offset_ != ~static_cast<uint64_t>(0));
+  assert(size_ != ~static_cast<uint64_t>(0));
+  PutVarint64(dst, offset_);
+  PutVarint64(dst, size_);
+}
+
+Status BlockHandle::DecodeFrom(Slice* input) {
+  if (GetVarint64(input, &offset_) &&
+      GetVarint64(input, &size_)) {
+    return Status::OK();
+  } else {
+    return Status::Corruption("bad block handle");
+  }
+}
+
+void Footer::EncodeTo(std::string* dst) const {
+  const size_t original_size = dst->size();
+  metaindex_handle_.EncodeTo(dst);
+  index_handle_.EncodeTo(dst);
+  dst->resize(2 * BlockHandle::kMaxEncodedLength);  // Padding
+  PutFixed32(dst, static_cast<uint32_t>(kTableMagicNumber & 0xffffffffu));
+  PutFixed32(dst, static_cast<uint32_t>(kTableMagicNumber >> 32));
+  assert(dst->size() == original_size + kEncodedLength);
+  (void)original_size;  // Disable unused variable warning.
+}
+
+Status Footer::DecodeFrom(Slice* input) {
+  const char* magic_ptr = input->data() + kEncodedLength - 8;
+  const uint32_t magic_lo = DecodeFixed32(magic_ptr);
+  const uint32_t magic_hi = DecodeFixed32(magic_ptr + 4);
+  const uint64_t magic = ((static_cast<uint64_t>(magic_hi) << 32) |
+                          (static_cast<uint64_t>(magic_lo)));
+  if (magic != kTableMagicNumber) {
+    return Status::Corruption("not an sstable (bad magic number)");
+  }
+
+  Status result = metaindex_handle_.DecodeFrom(input);
+  if (result.ok()) {
+    result = index_handle_.DecodeFrom(input);
+  }
+  if (result.ok()) {
+    // We skip over any leftover data (just padding for now) in "input"
+    const char* end = magic_ptr + 8;
+    *input = Slice(end, input->data() + input->size() - end);
+  }
+  return result;
+}
+
+Status ReadBlock(RandomAccessFile* file,
+                 const ReadOptions& options,
+                 const BlockHandle& handle,
+                 BlockContents* result) {
+  result->data = Slice();
+  result->cachable = false;
+  result->heap_allocated = false;
+
+  // Read the block contents as well as the type/crc footer.
+  // See table_builder.cc for the code that built this structure.
+  size_t n = static_cast<size_t>(handle.size());
+  char* buf = new char[n + kBlockTrailerSize];
+  Slice contents;
+  Status s = file->Read(handle.offset(), n + kBlockTrailerSize, &contents, buf);
+  if (!s.ok()) {
+    delete[] buf;
+    return s;
+  }
+  if (contents.size() != n + kBlockTrailerSize) {
+    delete[] buf;
+    return Status::Corruption("truncated block read");
+  }
+
+  // Check the crc of the type and the block contents
+  const char* data = contents.data();    // Pointer to where Read put the data
+  if (options.verify_checksums) {
+    const uint32_t crc = crc32c::Unmask(DecodeFixed32(data + n + 1));
+    const uint32_t actual = crc32c::Value(data, n + 1);
+    if (actual != crc) {
+      delete[] buf;
+      s = Status::Corruption("block checksum mismatch");
+      return s;
+    }
+  }
+
+  switch (data[n]) {
+    case kNoCompression:
+      if (data != buf) {
+        // File implementation gave us pointer to some other data.
+        // Use it directly under the assumption that it will be live
+        // while the file is open.
+        delete[] buf;
+        result->data = Slice(data, n);
+        result->heap_allocated = false;
+        result->cachable = false;  // Do not double-cache
+      } else {
+        result->data = Slice(buf, n);
+        result->heap_allocated = true;
+        result->cachable = true;
+      }
+
+      // Ok
+      break;
+    case kSnappyCompression: {
+      size_t ulength = 0;
+      if (!port::Snappy_GetUncompressedLength(data, n, &ulength)) {
+        delete[] buf;
+        return Status::Corruption("corrupted compressed block contents");
+      }
+      char* ubuf = new char[ulength];
+      if (!port::Snappy_Uncompress(data, n, ubuf)) {
+        delete[] buf;
+        delete[] ubuf;
+        return Status::Corruption("corrupted compressed block contents");
+      }
+      delete[] buf;
+      result->data = Slice(ubuf, ulength);
+      result->heap_allocated = true;
+      result->cachable = true;
+      break;
+    }
+    default:
+      delete[] buf;
+      return Status::Corruption("bad block type");
+  }
+
+  return Status::OK();
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+// See doc/table_format.txt for an explanation of the filter block format.
+
+// Generate new filter every 2KB of data
+static const size_t kFilterBaseLg = 11;
+static const size_t kFilterBase = 1 << kFilterBaseLg;
+
+FilterBlockBuilder::FilterBlockBuilder(const FilterPolicy* policy)
+    : policy_(policy) {
+}
+
+void FilterBlockBuilder::StartBlock(uint64_t block_offset) {
+  uint64_t filter_index = (block_offset / kFilterBase);
+  assert(filter_index >= filter_offsets_.size());
+  while (filter_index > filter_offsets_.size()) {
+    GenerateFilter();
+  }
+}
+
+void FilterBlockBuilder::AddKey(const Slice& key) {
+  Slice k = key;
+  start_.push_back(keys_.size());
+  keys_.append(k.data(), k.size());
+}
+
+Slice FilterBlockBuilder::Finish() {
+  if (!start_.empty()) {
+    GenerateFilter();
+  }
+
+  // Append array of per-filter offsets
+  const uint32_t array_offset = result_.size();
+  for (size_t i = 0; i < filter_offsets_.size(); i++) {
+    PutFixed32(&result_, filter_offsets_[i]);
+  }
+
+  PutFixed32(&result_, array_offset);
+  result_.push_back(kFilterBaseLg);  // Save encoding parameter in result
+  return Slice(result_);
+}
+
+void FilterBlockBuilder::GenerateFilter() {
+  const size_t num_keys = start_.size();
+  if (num_keys == 0) {
+    // Fast path if there are no keys for this filter
+    filter_offsets_.push_back(result_.size());
+    return;
+  }
+
+  // Make list of keys from flattened key structure
+  start_.push_back(keys_.size());  // Simplify length computation
+  tmp_keys_.resize(num_keys);
+  for (size_t i = 0; i < num_keys; i++) {
+    const char* base = keys_.data() + start_[i];
+    size_t length = start_[i+1] - start_[i];
+    tmp_keys_[i] = Slice(base, length);
+  }
+
+  // Generate filter for current set of keys and append to result_.
+  filter_offsets_.push_back(result_.size());
+  policy_->CreateFilter(&tmp_keys_[0], static_cast<int>(num_keys), &result_);
+
+  tmp_keys_.clear();
+  keys_.clear();
+  start_.clear();
+}
+
+FilterBlockReader::FilterBlockReader(const FilterPolicy* policy,
+                                     const Slice& contents)
+    : policy_(policy),
+      data_(NULL),
+      offset_(NULL),
+      num_(0),
+      base_lg_(0) {
+  size_t n = contents.size();
+  if (n < 5) return;  // 1 byte for base_lg_ and 4 for start of offset array
+  base_lg_ = contents[n-1];
+  uint32_t last_word = DecodeFixed32(contents.data() + n - 5);
+  if (last_word > n - 5) return;
+  data_ = contents.data();
+  offset_ = data_ + last_word;
+  num_ = (n - 5 - last_word) / 4;
+}
+
+bool FilterBlockReader::KeyMayMatch(uint64_t block_offset, const Slice& key) {
+  uint64_t index = block_offset >> base_lg_;
+  if (index < num_) {
+    uint32_t start = DecodeFixed32(offset_ + index*4);
+    uint32_t limit = DecodeFixed32(offset_ + index*4 + 4);
+    if (start <= limit && limit <= static_cast<size_t>(offset_ - data_)) {
+      Slice filter = Slice(data_ + start, limit - start);
+      return policy_->KeyMayMatch(key, filter);
+    } else if (start == limit) {
+      // Empty filters do not match any keys
+      return false;
+    }
+  }
+  return true;  // Errors are treated as potential matches
+}
+
+}
+
+namespace leveldb {
+
+namespace {
+
+typedef Iterator* (*BlockFunction)(void*, const ReadOptions&, const Slice&);
+
+class TwoLevelIterator: public Iterator {
+ public:
+  TwoLevelIterator(
+    Iterator* index_iter,
+    BlockFunction block_function,
+    void* arg,
+    const ReadOptions& options);
+
+  virtual ~TwoLevelIterator();
+
+  virtual void Seek(const Slice& target);
+  virtual void SeekToFirst();
+  virtual void SeekToLast();
+  virtual void Next();
+  virtual void Prev();
+
+  virtual bool Valid() const {
+    return data_iter_.Valid();
+  }
+  virtual Slice key() const {
+    assert(Valid());
+    return data_iter_.key();
+  }
+  virtual Slice value() const {
+    assert(Valid());
+    return data_iter_.value();
+  }
+  virtual Status status() const {
+    // It'd be nice if status() returned a const Status& instead of a Status
+    if (!index_iter_.status().ok()) {
+      return index_iter_.status();
+    } else if (data_iter_.iter() != NULL && !data_iter_.status().ok()) {
+      return data_iter_.status();
+    } else {
+      return status_;
+    }
+  }
+
+ private:
+  void SaveError(const Status& s) {
+    if (status_.ok() && !s.ok()) status_ = s;
+  }
+  void SkipEmptyDataBlocksForward();
+  void SkipEmptyDataBlocksBackward();
+  void SetDataIterator(Iterator* data_iter);
+  void InitDataBlock();
+
+  BlockFunction block_function_;
+  void* arg_;
+  const ReadOptions options_;
+  Status status_;
+  IteratorWrapper index_iter_;
+  IteratorWrapper data_iter_; // May be NULL
+  // If data_iter_ is non-NULL, then "data_block_handle_" holds the
+  // "index_value" passed to block_function_ to create the data_iter_.
+  std::string data_block_handle_;
+};
+
+TwoLevelIterator::TwoLevelIterator(
+    Iterator* index_iter,
+    BlockFunction block_function,
+    void* arg,
+    const ReadOptions& options)
+    : block_function_(block_function),
+      arg_(arg),
+      options_(options),
+      index_iter_(index_iter),
+      data_iter_(NULL) {
+}
+
+TwoLevelIterator::~TwoLevelIterator() {
+}
+
+void TwoLevelIterator::Seek(const Slice& target) {
+  index_iter_.Seek(target);
+  InitDataBlock();
+  if (data_iter_.iter() != NULL) data_iter_.Seek(target);
+  SkipEmptyDataBlocksForward();
+}
+
+void TwoLevelIterator::SeekToFirst() {
+  index_iter_.SeekToFirst();
+  InitDataBlock();
+  if (data_iter_.iter() != NULL) data_iter_.SeekToFirst();
+  SkipEmptyDataBlocksForward();
+}
+
+void TwoLevelIterator::SeekToLast() {
+  index_iter_.SeekToLast();
+  InitDataBlock();
+  if (data_iter_.iter() != NULL) data_iter_.SeekToLast();
+  SkipEmptyDataBlocksBackward();
+}
+
+void TwoLevelIterator::Next() {
+  assert(Valid());
+  data_iter_.Next();
+  SkipEmptyDataBlocksForward();
+}
+
+void TwoLevelIterator::Prev() {
+  assert(Valid());
+  data_iter_.Prev();
+  SkipEmptyDataBlocksBackward();
+}
+
+
+void TwoLevelIterator::SkipEmptyDataBlocksForward() {
+  while (data_iter_.iter() == NULL || !data_iter_.Valid()) {
+    // Move to next block
+    if (!index_iter_.Valid()) {
+      SetDataIterator(NULL);
+      return;
+    }
+    index_iter_.Next();
+    InitDataBlock();
+    if (data_iter_.iter() != NULL) data_iter_.SeekToFirst();
+  }
+}
+
+void TwoLevelIterator::SkipEmptyDataBlocksBackward() {
+  while (data_iter_.iter() == NULL || !data_iter_.Valid()) {
+    // Move to next block
+    if (!index_iter_.Valid()) {
+      SetDataIterator(NULL);
+      return;
+    }
+    index_iter_.Prev();
+    InitDataBlock();
+    if (data_iter_.iter() != NULL) data_iter_.SeekToLast();
+  }
+}
+
+void TwoLevelIterator::SetDataIterator(Iterator* data_iter) {
+  if (data_iter_.iter() != NULL) SaveError(data_iter_.status());
+  data_iter_.Set(data_iter);
+}
+
+void TwoLevelIterator::InitDataBlock() {
+  if (!index_iter_.Valid()) {
+    SetDataIterator(NULL);
+  } else {
+    Slice handle = index_iter_.value();
+    if (data_iter_.iter() != NULL && handle.compare(data_block_handle_) == 0) {
+      // data_iter_ is already constructed with this iterator, so
+      // no need to change anything
+    } else {
+      Iterator* iter = (*block_function_)(arg_, options_, handle);
+      data_block_handle_.assign(handle.data(), handle.size());
+      SetDataIterator(iter);
+    }
+  }
+}
+
+}  // namespace
+
+Iterator* NewTwoLevelIterator(
+    Iterator* index_iter,
+    BlockFunction block_function,
+    void* arg,
+    const ReadOptions& options) {
+  return new TwoLevelIterator(index_iter, block_function, arg, options);
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+struct TableBuilder::Rep {
+  Options options;
+  Options index_block_options;
+  WritableFile* file;
+  uint64_t offset;
+  Status status;
+  BlockBuilder data_block;
+  BlockBuilder index_block;
+  std::string last_key;
+  int64_t num_entries;
+  bool closed;          // Either Finish() or Abandon() has been called.
+  FilterBlockBuilder* filter_block;
+
+  // We do not emit the index entry for a block until we have seen the
+  // first key for the next data block.  This allows us to use shorter
+  // keys in the index block.  For example, consider a block boundary
+  // between the keys "the quick brown fox" and "the who".  We can use
+  // "the r" as the key for the index block entry since it is >= all
+  // entries in the first block and < all entries in subsequent
+  // blocks.
+  //
+  // Invariant: r->pending_index_entry is true only if data_block is empty.
+  bool pending_index_entry;
+  BlockHandle pending_handle;  // Handle to add to index block
+
+  std::string compressed_output;
+
+  Rep(const Options& opt, WritableFile* f)
+      : options(opt),
+        index_block_options(opt),
+        file(f),
+        offset(0),
+        data_block(&options),
+        index_block(&index_block_options),
+        num_entries(0),
+        closed(false),
+        filter_block(opt.filter_policy == NULL ? NULL
+                     : new FilterBlockBuilder(opt.filter_policy)),
+        pending_index_entry(false) {
+    index_block_options.block_restart_interval = 1;
+  }
+};
+
+TableBuilder::TableBuilder(const Options& options, WritableFile* file)
+    : rep_(new Rep(options, file)) {
+  if (rep_->filter_block != NULL) {
+    rep_->filter_block->StartBlock(0);
+  }
+}
+
+TableBuilder::~TableBuilder() {
+  assert(rep_->closed);  // Catch errors where caller forgot to call Finish()
+  delete rep_->filter_block;
+  delete rep_;
+}
+
+Status TableBuilder::ChangeOptions(const Options& options) {
+  // Note: if more fields are added to Options, update
+  // this function to catch changes that should not be allowed to
+  // change in the middle of building a Table.
+  if (options.comparator != rep_->options.comparator) {
+    return Status::InvalidArgument("changing comparator while building table");
+  }
+
+  // Note that any live BlockBuilders point to rep_->options and therefore
+  // will automatically pick up the updated options.
+  rep_->options = options;
+  rep_->index_block_options = options;
+  rep_->index_block_options.block_restart_interval = 1;
+  return Status::OK();
+}
+
+void TableBuilder::Add(const Slice& key, const Slice& value) {
+  Rep* r = rep_;
+  assert(!r->closed);
+  if (!ok()) return;
+  if (r->num_entries > 0) {
+    assert(r->options.comparator->Compare(key, Slice(r->last_key)) > 0);
+  }
+
+  if (r->pending_index_entry) {
+    assert(r->data_block.empty());
+    r->options.comparator->FindShortestSeparator(&r->last_key, key);
+    std::string handle_encoding;
+    r->pending_handle.EncodeTo(&handle_encoding);
+    r->index_block.Add(r->last_key, Slice(handle_encoding));
+    r->pending_index_entry = false;
+  }
+
+  if (r->filter_block != NULL) {
+    r->filter_block->AddKey(key);
+  }
+
+  r->last_key.assign(key.data(), key.size());
+  r->num_entries++;
+  r->data_block.Add(key, value);
+
+  const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
+  if (estimated_block_size >= r->options.block_size) {
+    Flush();
+  }
+}
+
+void TableBuilder::Flush() {
+  Rep* r = rep_;
+  assert(!r->closed);
+  if (!ok()) return;
+  if (r->data_block.empty()) return;
+  assert(!r->pending_index_entry);
+  WriteBlock(&r->data_block, &r->pending_handle);
+  if (ok()) {
+    r->pending_index_entry = true;
+    r->status = r->file->Flush();
+  }
+  if (r->filter_block != NULL) {
+    r->filter_block->StartBlock(r->offset);
+  }
+}
+
+void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
+  // File format contains a sequence of blocks where each block has:
+  //    block_data: uint8[n]
+  //    type: uint8
+  //    crc: uint32
+  assert(ok());
+  Rep* r = rep_;
+  Slice raw = block->Finish();
+
+  Slice block_contents;
+  CompressionType type = r->options.compression;
+  // TODO(postrelease): Support more compression options: zlib?
+  switch (type) {
+    case kNoCompression:
+      block_contents = raw;
+      break;
+
+    case kSnappyCompression: {
+      std::string* compressed = &r->compressed_output;
+      if (port::Snappy_Compress(raw.data(), raw.size(), compressed) &&
+          compressed->size() < raw.size() - (raw.size() / 8u)) {
+        block_contents = *compressed;
+      } else {
+        // Snappy not supported, or compressed less than 12.5%, so just
+        // store uncompressed form
+        block_contents = raw;
+        type = kNoCompression;
+      }
+      break;
+    }
+  }
+  WriteRawBlock(block_contents, type, handle);
+  r->compressed_output.clear();
+  block->Reset();
+}
+
+void TableBuilder::WriteRawBlock(const Slice& block_contents,
+                                 CompressionType type,
+                                 BlockHandle* handle) {
+  Rep* r = rep_;
+  handle->set_offset(r->offset);
+  handle->set_size(block_contents.size());
+  r->status = r->file->Append(block_contents);
+  if (r->status.ok()) {
+    char trailer[kBlockTrailerSize];
+    trailer[0] = type;
+    uint32_t crc = crc32c::Value(block_contents.data(), block_contents.size());
+    crc = crc32c::Extend(crc, trailer, 1);  // Extend crc to cover block type
+    EncodeFixed32(trailer+1, crc32c::Mask(crc));
+    r->status = r->file->Append(Slice(trailer, kBlockTrailerSize));
+    if (r->status.ok()) {
+      r->offset += block_contents.size() + kBlockTrailerSize;
+    }
+  }
+}
+
+Status TableBuilder::status() const {
+  return rep_->status;
+}
+
+Status TableBuilder::Finish() {
+  Rep* r = rep_;
+  Flush();
+  assert(!r->closed);
+  r->closed = true;
+
+  BlockHandle filter_block_handle, metaindex_block_handle, index_block_handle;
+
+  // Write filter block
+  if (ok() && r->filter_block != NULL) {
+    WriteRawBlock(r->filter_block->Finish(), kNoCompression,
+                  &filter_block_handle);
+  }
+
+  // Write metaindex block
+  if (ok()) {
+    BlockBuilder meta_index_block(&r->options);
+    if (r->filter_block != NULL) {
+      // Add mapping from "filter.Name" to location of filter data
+      std::string key = "filter.";
+      key.append(r->options.filter_policy->Name());
+      std::string handle_encoding;
+      filter_block_handle.EncodeTo(&handle_encoding);
+      meta_index_block.Add(key, handle_encoding);
+    }
+
+    // TODO(postrelease): Add stats and other meta blocks
+    WriteBlock(&meta_index_block, &metaindex_block_handle);
+  }
+
+  // Write index block
+  if (ok()) {
+    if (r->pending_index_entry) {
+      r->options.comparator->FindShortSuccessor(&r->last_key);
+      std::string handle_encoding;
+      r->pending_handle.EncodeTo(&handle_encoding);
+      r->index_block.Add(r->last_key, Slice(handle_encoding));
+      r->pending_index_entry = false;
+    }
+    WriteBlock(&r->index_block, &index_block_handle);
+  }
+
+  // Write footer
+  if (ok()) {
+    Footer footer;
+    footer.set_metaindex_handle(metaindex_block_handle);
+    footer.set_index_handle(index_block_handle);
+    std::string footer_encoding;
+    footer.EncodeTo(&footer_encoding);
+    r->status = r->file->Append(footer_encoding);
+    if (r->status.ok()) {
+      r->offset += footer_encoding.size();
+    }
+  }
+  return r->status;
+}
+
+void TableBuilder::Abandon() {
+  Rep* r = rep_;
+  assert(!r->closed);
+  r->closed = true;
+}
+
+uint64_t TableBuilder::NumEntries() const {
+  return rep_->num_entries;
+}
+
+uint64_t TableBuilder::FileSize() const {
+  return rep_->offset;
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+BlockBuilder::BlockBuilder(const Options* options)
+    : options_(options),
+      restarts_(),
+      counter_(0),
+      finished_(false) {
+  assert(options->block_restart_interval >= 1);
+  restarts_.push_back(0);       // First restart point is at offset 0
+}
+
+void BlockBuilder::Reset() {
+  buffer_.clear();
+  restarts_.clear();
+  restarts_.push_back(0);       // First restart point is at offset 0
+  counter_ = 0;
+  finished_ = false;
+  last_key_.clear();
+}
+
+size_t BlockBuilder::CurrentSizeEstimate() const {
+  return (buffer_.size() +                        // Raw data buffer
+          restarts_.size() * sizeof(uint32_t) +   // Restart array
+          sizeof(uint32_t));                      // Restart array length
+}
+
+Slice BlockBuilder::Finish() {
+  // Append restart array
+  for (size_t i = 0; i < restarts_.size(); i++) {
+    PutFixed32(&buffer_, restarts_[i]);
+  }
+  PutFixed32(&buffer_, restarts_.size());
+  finished_ = true;
+  return Slice(buffer_);
+}
+
+void BlockBuilder::Add(const Slice& key, const Slice& value) {
+  Slice last_key_piece(last_key_);
+  assert(!finished_);
+  assert(counter_ <= options_->block_restart_interval);
+  assert(buffer_.empty() // No values yet?
+         || options_->comparator->Compare(key, last_key_piece) > 0);
+  size_t shared = 0;
+  if (counter_ < options_->block_restart_interval) {
+    // See how much sharing to do with previous string
+    const size_t min_length = std::min(last_key_piece.size(), key.size());
+    while ((shared < min_length) && (last_key_piece[shared] == key[shared])) {
+      shared++;
+    }
+  } else {
+    // Restart compression
+    restarts_.push_back(buffer_.size());
+    counter_ = 0;
+  }
+  const size_t non_shared = key.size() - shared;
+
+  // Add "<shared><non_shared><value_size>" to buffer_
+  PutVarint32(&buffer_, shared);
+  PutVarint32(&buffer_, non_shared);
+  PutVarint32(&buffer_, value.size());
+
+  // Add string delta to buffer_ followed by value
+  buffer_.append(key.data() + shared, non_shared);
+  buffer_.append(value.data(), value.size());
+
+  // Update state
+  last_key_.resize(shared);
+  last_key_.append(key.data() + shared, non_shared);
+  assert(Slice(last_key_) == key);
+  counter_++;
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+namespace {
+class MergingIterator : public Iterator {
+ public:
+  MergingIterator(const Comparator* comparator, Iterator** children, int n)
+      : comparator_(comparator),
+        children_(new IteratorWrapper[n]),
+        n_(n),
+        current_(NULL),
+        direction_(kForward) {
+    for (int i = 0; i < n; i++) {
+      children_[i].Set(children[i]);
+    }
+  }
+
+  virtual ~MergingIterator() {
+    delete[] children_;
+  }
+
+  virtual bool Valid() const {
+    return (current_ != NULL);
+  }
+
+  virtual void SeekToFirst() {
+    for (int i = 0; i < n_; i++) {
+      children_[i].SeekToFirst();
+    }
+    FindSmallest();
+    direction_ = kForward;
+  }
+
+  virtual void SeekToLast() {
+    for (int i = 0; i < n_; i++) {
+      children_[i].SeekToLast();
+    }
+    FindLargest();
+    direction_ = kReverse;
+  }
+
+  virtual void Seek(const Slice& target) {
+    for (int i = 0; i < n_; i++) {
+      children_[i].Seek(target);
+    }
+    FindSmallest();
+    direction_ = kForward;
+  }
+
+  virtual void Next() {
+    assert(Valid());
+
+    // Ensure that all children are positioned after key().
+    // If we are moving in the forward direction, it is already
+    // true for all of the non-current_ children since current_ is
+    // the smallest child and key() == current_->key().  Otherwise,
+    // we explicitly position the non-current_ children.
+    if (direction_ != kForward) {
+      for (int i = 0; i < n_; i++) {
+        IteratorWrapper* child = &children_[i];
+        if (child != current_) {
+          child->Seek(key());
+          if (child->Valid() &&
+              comparator_->Compare(key(), child->key()) == 0) {
+            child->Next();
+          }
+        }
+      }
+      direction_ = kForward;
+    }
+
+    current_->Next();
+    FindSmallest();
+  }
+
+  virtual void Prev() {
+    assert(Valid());
+
+    // Ensure that all children are positioned before key().
+    // If we are moving in the reverse direction, it is already
+    // true for all of the non-current_ children since current_ is
+    // the largest child and key() == current_->key().  Otherwise,
+    // we explicitly position the non-current_ children.
+    if (direction_ != kReverse) {
+      for (int i = 0; i < n_; i++) {
+        IteratorWrapper* child = &children_[i];
+        if (child != current_) {
+          child->Seek(key());
+          if (child->Valid()) {
+            // Child is at first entry >= key().  Step back one to be < key()
+            child->Prev();
+          } else {
+            // Child has no entries >= key().  Position at last entry.
+            child->SeekToLast();
+          }
+        }
+      }
+      direction_ = kReverse;
+    }
+
+    current_->Prev();
+    FindLargest();
+  }
+
+  virtual Slice key() const {
+    assert(Valid());
+    return current_->key();
+  }
+
+  virtual Slice value() const {
+    assert(Valid());
+    return current_->value();
+  }
+
+  virtual Status status() const {
+    Status status;
+    for (int i = 0; i < n_; i++) {
+      status = children_[i].status();
+      if (!status.ok()) {
+        break;
+      }
+    }
+    return status;
+  }
+
+ private:
+  void FindSmallest();
+  void FindLargest();
+
+  // We might want to use a heap in case there are lots of children.
+  // For now we use a simple array since we expect a very small number
+  // of children in leveldb.
+  const Comparator* comparator_;
+  IteratorWrapper* children_;
+  int n_;
+  IteratorWrapper* current_;
+
+  // Which direction is the iterator moving?
+  enum Direction {
+    kForward,
+    kReverse
+  };
+  Direction direction_;
+};
+
+void MergingIterator::FindSmallest() {
+  IteratorWrapper* smallest = NULL;
+  for (int i = 0; i < n_; i++) {
+    IteratorWrapper* child = &children_[i];
+    if (child->Valid()) {
+      if (smallest == NULL) {
+        smallest = child;
+      } else if (comparator_->Compare(child->key(), smallest->key()) < 0) {
+        smallest = child;
+      }
+    }
+  }
+  current_ = smallest;
+}
+
+void MergingIterator::FindLargest() {
+  IteratorWrapper* largest = NULL;
+  for (int i = n_-1; i >= 0; i--) {
+    IteratorWrapper* child = &children_[i];
+    if (child->Valid()) {
+      if (largest == NULL) {
+        largest = child;
+      } else if (comparator_->Compare(child->key(), largest->key()) > 0) {
+        largest = child;
+      }
+    }
+  }
+  current_ = largest;
+}
+}  // namespace
+
+Iterator* NewMergingIterator(const Comparator* cmp, Iterator** list, int n) {
+  assert(n >= 0);
+  if (n == 0) {
+    return NewEmptyIterator();
+  } else if (n == 1) {
+    return list[0];
+  } else {
+    return new MergingIterator(cmp, list, n);
+  }
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+// Tag numbers for serialized VersionEdit.  These numbers are written to
+// disk and should not be changed.
+enum Tag {
+  kComparator           = 1,
+  kLogNumber            = 2,
+  kNextFileNumber       = 3,
+  kLastSequence         = 4,
+  kCompactPointer       = 5,
+  kDeletedFile          = 6,
+  kNewFile              = 7,
+  // 8 was used for large value refs
+  kPrevLogNumber        = 9
+};
+
+void VersionEdit::Clear() {
+  comparator_.clear();
+  log_number_ = 0;
+  prev_log_number_ = 0;
+  last_sequence_ = 0;
+  next_file_number_ = 0;
+  has_comparator_ = false;
+  has_log_number_ = false;
+  has_prev_log_number_ = false;
+  has_next_file_number_ = false;
+  has_last_sequence_ = false;
+  deleted_files_.clear();
+  new_files_.clear();
+}
+
+void VersionEdit::EncodeTo(std::string* dst) const {
+  if (has_comparator_) {
+    PutVarint32(dst, kComparator);
+    PutLengthPrefixedSlice(dst, comparator_);
+  }
+  if (has_log_number_) {
+    PutVarint32(dst, kLogNumber);
+    PutVarint64(dst, log_number_);
+  }
+  if (has_prev_log_number_) {
+    PutVarint32(dst, kPrevLogNumber);
+    PutVarint64(dst, prev_log_number_);
+  }
+  if (has_next_file_number_) {
+    PutVarint32(dst, kNextFileNumber);
+    PutVarint64(dst, next_file_number_);
+  }
+  if (has_last_sequence_) {
+    PutVarint32(dst, kLastSequence);
+    PutVarint64(dst, last_sequence_);
+  }
+
+  for (size_t i = 0; i < compact_pointers_.size(); i++) {
+    PutVarint32(dst, kCompactPointer);
+    PutVarint32(dst, compact_pointers_[i].first);  // level
+    PutLengthPrefixedSlice(dst, compact_pointers_[i].second.Encode());
+  }
+
+  for (DeletedFileSet::const_iterator iter = deleted_files_.begin();
+       iter != deleted_files_.end();
+       ++iter) {
+    PutVarint32(dst, kDeletedFile);
+    PutVarint32(dst, iter->first);   // level
+    PutVarint64(dst, iter->second);  // file number
+  }
+
+  for (size_t i = 0; i < new_files_.size(); i++) {
+    const FileMetaData& f = new_files_[i].second;
+    PutVarint32(dst, kNewFile);
+    PutVarint32(dst, new_files_[i].first);  // level
+    PutVarint64(dst, f.number);
+    PutVarint64(dst, f.file_size);
+    PutLengthPrefixedSlice(dst, f.smallest.Encode());
+    PutLengthPrefixedSlice(dst, f.largest.Encode());
+  }
+}
+
+static bool GetInternalKey(Slice* input, InternalKey* dst) {
+  Slice str;
+  if (GetLengthPrefixedSlice(input, &str)) {
+    dst->DecodeFrom(str);
+    return true;
+  } else {
+    return false;
+  }
+}
+
+static bool GetLevel(Slice* input, int* level) {
+  uint32_t v;
+  if (GetVarint32(input, &v) &&
+      v < config::kNumLevels) {
+    *level = v;
+    return true;
+  } else {
+    return false;
+  }
+}
+
+Status VersionEdit::DecodeFrom(const Slice& src) {
+  Clear();
+  Slice input = src;
+  const char* msg = NULL;
+  uint32_t tag;
+
+  // Temporary storage for parsing
+  int level;
+  uint64_t number;
+  FileMetaData f;
+  Slice str;
+  InternalKey key;
+
+  while (msg == NULL && GetVarint32(&input, &tag)) {
+    switch (tag) {
+      case kComparator:
+        if (GetLengthPrefixedSlice(&input, &str)) {
+          comparator_ = str.ToString();
+          has_comparator_ = true;
+        } else {
+          msg = "comparator name";
+        }
+        break;
+
+      case kLogNumber:
+        if (GetVarint64(&input, &log_number_)) {
+          has_log_number_ = true;
+        } else {
+          msg = "log number";
+        }
+        break;
+
+      case kPrevLogNumber:
+        if (GetVarint64(&input, &prev_log_number_)) {
+          has_prev_log_number_ = true;
+        } else {
+          msg = "previous log number";
+        }
+        break;
+
+      case kNextFileNumber:
+        if (GetVarint64(&input, &next_file_number_)) {
+          has_next_file_number_ = true;
+        } else {
+          msg = "next file number";
+        }
+        break;
+
+      case kLastSequence:
+        if (GetVarint64(&input, &last_sequence_)) {
+          has_last_sequence_ = true;
+        } else {
+          msg = "last sequence number";
+        }
+        break;
+
+      case kCompactPointer:
+        if (GetLevel(&input, &level) &&
+            GetInternalKey(&input, &key)) {
+          compact_pointers_.push_back(std::make_pair(level, key));
+        } else {
+          msg = "compaction pointer";
+        }
+        break;
+
+      case kDeletedFile:
+        if (GetLevel(&input, &level) &&
+            GetVarint64(&input, &number)) {
+          deleted_files_.insert(std::make_pair(level, number));
+        } else {
+          msg = "deleted file";
+        }
+        break;
+
+      case kNewFile:
+        if (GetLevel(&input, &level) &&
+            GetVarint64(&input, &f.number) &&
+            GetVarint64(&input, &f.file_size) &&
+            GetInternalKey(&input, &f.smallest) &&
+            GetInternalKey(&input, &f.largest)) {
+          new_files_.push_back(std::make_pair(level, f));
+        } else {
+          msg = "new-file entry";
+        }
+        break;
+
+      default:
+        msg = "unknown tag";
+        break;
+    }
+  }
+
+  if (msg == NULL && !input.empty()) {
+    msg = "invalid tag";
+  }
+
+  Status result;
+  if (msg != NULL) {
+    result = Status::Corruption("VersionEdit", msg);
+  }
+  return result;
+}
+
+std::string VersionEdit::DebugString() const {
+  std::string r;
+  r.append("VersionEdit {");
+  if (has_comparator_) {
+    r.append("\n  Comparator: ");
+    r.append(comparator_);
+  }
+  if (has_log_number_) {
+    r.append("\n  LogNumber: ");
+    AppendNumberTo(&r, log_number_);
+  }
+  if (has_prev_log_number_) {
+    r.append("\n  PrevLogNumber: ");
+    AppendNumberTo(&r, prev_log_number_);
+  }
+  if (has_next_file_number_) {
+    r.append("\n  NextFile: ");
+    AppendNumberTo(&r, next_file_number_);
+  }
+  if (has_last_sequence_) {
+    r.append("\n  LastSeq: ");
+    AppendNumberTo(&r, last_sequence_);
+  }
+  for (size_t i = 0; i < compact_pointers_.size(); i++) {
+    r.append("\n  CompactPointer: ");
+    AppendNumberTo(&r, compact_pointers_[i].first);
+    r.append(" ");
+    r.append(compact_pointers_[i].second.DebugString());
+  }
+  for (DeletedFileSet::const_iterator iter = deleted_files_.begin();
+       iter != deleted_files_.end();
+       ++iter) {
+    r.append("\n  DeleteFile: ");
+    AppendNumberTo(&r, iter->first);
+    r.append(" ");
+    AppendNumberTo(&r, iter->second);
+  }
+  for (size_t i = 0; i < new_files_.size(); i++) {
+    const FileMetaData& f = new_files_[i].second;
+    r.append("\n  AddFile: ");
+    AppendNumberTo(&r, new_files_[i].first);
+    r.append(" ");
+    AppendNumberTo(&r, f.number);
+    r.append(" ");
+    AppendNumberTo(&r, f.file_size);
+    r.append(" ");
+    r.append(f.smallest.DebugString());
+    r.append(" .. ");
+    r.append(f.largest.DebugString());
+  }
+  r.append("\n}\n");
+  return r;
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+Status BuildTable(const std::string& dbname,
+                  Env* env,
+                  const Options& options,
+                  TableCache* table_cache,
+                  Iterator* iter,
+                  FileMetaData* meta) {
+  Status s;
+  meta->file_size = 0;
+  iter->SeekToFirst();
+
+  std::string fname = TableFileName(dbname, meta->number);
+  if (iter->Valid()) {
+    WritableFile* file;
+    s = env->NewWritableFile(fname, &file);
+    if (!s.ok()) {
+      return s;
+    }
+
+    TableBuilder* builder = new TableBuilder(options, file);
+    meta->smallest.DecodeFrom(iter->key());
+    for (; iter->Valid(); iter->Next()) {
+      Slice key = iter->key();
+      meta->largest.DecodeFrom(key);
+      builder->Add(key, iter->value());
+    }
+
+    // Finish and check for builder errors
+    if (s.ok()) {
+      s = builder->Finish();
+      if (s.ok()) {
+        meta->file_size = builder->FileSize();
+        assert(meta->file_size > 0);
+      }
+    } else {
+      builder->Abandon();
+    }
+    delete builder;
+
+    // Finish and check for file errors
+    if (s.ok()) {
+      s = file->Sync();
+    }
+    if (s.ok()) {
+      s = file->Close();
+    }
+    delete file;
+    file = NULL;
+
+    if (s.ok()) {
+      // Verify that the table is usable
+      Iterator* it = table_cache->NewIterator(ReadOptions(),
+                                              meta->number,
+                                              meta->file_size);
+      s = it->status();
+      delete it;
+    }
+  }
+
+  // Check for input iterator errors
+  if (!iter->status().ok()) {
+    s = iter->status();
+  }
+
+  if (s.ok() && meta->file_size > 0) {
+    // Keep it
+  } else {
+    env->DeleteFile(fname);
+  }
+  return s;
+}
+
+}  // namespace leveldb
+
+namespace leveldb {
+
+#if 0
+static void DumpInternalIter(Iterator* iter) {
+  for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+    ParsedInternalKey k;
+    if (!ParseInternalKey(iter->key(), &k)) {
+      fprintf(stderr, "Corrupt '%s'\n", EscapeString(iter->key()).c_str());
+    } else {
+      fprintf(stderr, "@ '%s'\n", k.DebugString().c_str());
+    }
+  }
+}
+#endif
+
+namespace {
+
+// Memtables and sstables that make the DB representation contain
+// (userkey,seq,type) => uservalue entries.  DBIter
+// combines multiple entries for the same userkey found in the DB
+// representation into a single entry while accounting for sequence
+// numbers, deletion markers, overwrites, etc.
+class DBIter: public Iterator {
+ public:
+  // Which direction is the iterator currently moving?
+  // (1) When moving forward, the internal iterator is positioned at
+  //     the exact entry that yields this->key(), this->value()
+  // (2) When moving backwards, the internal iterator is positioned
+  //     just before all entries whose user key == this->key().
+  enum Direction {
+    kForward,
+    kReverse
+  };
+
+  DBIter(DBImpl* db, const Comparator* cmp, Iterator* iter, SequenceNumber s,
+         uint32_t seed)
+      : db_(db),
+        user_comparator_(cmp),
+        iter_(iter),
+        sequence_(s),
+        direction_(kForward),
+        valid_(false),
+        rnd_(seed),
+        bytes_counter_(RandomPeriod()) {
+  }
+  virtual ~DBIter() {
+    delete iter_;
+  }
+  virtual bool Valid() const { return valid_; }
+  virtual Slice key() const {
+    assert(valid_);
+    return (direction_ == kForward) ? ExtractUserKey(iter_->key()) : saved_key_;
+  }
+  virtual Slice value() const {
+    assert(valid_);
+    return (direction_ == kForward) ? iter_->value() : saved_value_;
+  }
+  virtual Status status() const {
+    if (status_.ok()) {
+      return iter_->status();
+    } else {
+      return status_;
+    }
+  }
+
+  virtual void Next();
+  virtual void Prev();
+  virtual void Seek(const Slice& target);
+  virtual void SeekToFirst();
+  virtual void SeekToLast();
+
+ private:
+  void FindNextUserEntry(bool skipping, std::string* skip);
+  void FindPrevUserEntry();
+  bool ParseKey(ParsedInternalKey* key);
+
+  inline void SaveKey(const Slice& k, std::string* dst) {
+    dst->assign(k.data(), k.size());
+  }
+
+  inline void ClearSavedValue() {
+    if (saved_value_.capacity() > 1048576) {
+      std::string empty;
+      swap(empty, saved_value_);
+    } else {
+      saved_value_.clear();
+    }
+  }
+
+  // Pick next gap with average value of config::kReadBytesPeriod.
+  ssize_t RandomPeriod() {
+    return rnd_.Uniform(2*config::kReadBytesPeriod);
+  }
+
+  DBImpl* db_;
+  const Comparator* const user_comparator_;
+  Iterator* const iter_;
+  SequenceNumber const sequence_;
+
+  Status status_;
+  std::string saved_key_;     // == current key when direction_==kReverse
+  std::string saved_value_;   // == current raw value when direction_==kReverse
+  Direction direction_;
+  bool valid_;
+
+  Random rnd_;
+  ssize_t bytes_counter_;
+
+  // No copying allowed
+  DBIter(const DBIter&);
+  void operator=(const DBIter&);
+};
+
+inline bool DBIter::ParseKey(ParsedInternalKey* ikey) {
+  Slice k = iter_->key();
+  ssize_t n = k.size() + iter_->value().size();
+  bytes_counter_ -= n;
+  while (bytes_counter_ < 0) {
+    bytes_counter_ += RandomPeriod();
+    db_->RecordReadSample(k);
+  }
+  if (!ParseInternalKey(k, ikey)) {
+    status_ = Status::Corruption("corrupted internal key in DBIter");
+    return false;
+  } else {
+    return true;
+  }
+}
+
+void DBIter::Next() {
+  assert(valid_);
+
+  if (direction_ == kReverse) {  // Switch directions?
+    direction_ = kForward;
+    // iter_ is pointing just before the entries for this->key(),
+    // so advance into the range of entries for this->key() and then
+    // use the normal skipping code below.
+    if (!iter_->Valid()) {
+      iter_->SeekToFirst();
+    } else {
+      iter_->Next();
+    }
+    if (!iter_->Valid()) {
+      valid_ = false;
+      saved_key_.clear();
+      return;
+    }
+    // saved_key_ already contains the key to skip past.
+  } else {
+    // Store in saved_key_ the current key so we skip it below.
+    SaveKey(ExtractUserKey(iter_->key()), &saved_key_);
+  }
+
+  FindNextUserEntry(true, &saved_key_);
+}
+
+void DBIter::FindNextUserEntry(bool skipping, std::string* skip) {
+  // Loop until we hit an acceptable entry to yield
+  assert(iter_->Valid());
+  assert(direction_ == kForward);
+  do {
+    ParsedInternalKey ikey;
+    if (ParseKey(&ikey) && ikey.sequence <= sequence_) {
+      switch (ikey.type) {
+        case kTypeDeletion:
+          // Arrange to skip all upcoming entries for this key since
+          // they are hidden by this deletion.
+          SaveKey(ikey.user_key, skip);
+          skipping = true;
+          break;
+        case kTypeValue:
+          if (skipping &&
+              user_comparator_->Compare(ikey.user_key, *skip) <= 0) {
+            // Entry hidden
+          } else {
+            valid_ = true;
+            saved_key_.clear();
+            return;
+          }
+          break;
+      }
+    }
+    iter_->Next();
+  } while (iter_->Valid());
+  saved_key_.clear();
+  valid_ = false;
+}
+
+void DBIter::Prev() {
+  assert(valid_);
+
+  if (direction_ == kForward) {  // Switch directions?
+    // iter_ is pointing at the current entry.  Scan backwards until
+    // the key changes so we can use the normal reverse scanning code.
+    assert(iter_->Valid());  // Otherwise valid_ would have been false
+    SaveKey(ExtractUserKey(iter_->key()), &saved_key_);
+    while (true) {
+      iter_->Prev();
+      if (!iter_->Valid()) {
+        valid_ = false;
+        saved_key_.clear();
+        ClearSavedValue();
+        return;
+      }
+      if (user_comparator_->Compare(ExtractUserKey(iter_->key()),
+                                    saved_key_) < 0) {
+        break;
+      }
+    }
+    direction_ = kReverse;
+  }
+
+  FindPrevUserEntry();
+}
+
+void DBIter::FindPrevUserEntry() {
+  assert(direction_ == kReverse);
+
+  ValueType value_type = kTypeDeletion;
+  if (iter_->Valid()) {
+    do {
+      ParsedInternalKey ikey;
+      if (ParseKey(&ikey) && ikey.sequence <= sequence_) {
+        if ((value_type != kTypeDeletion) &&
+            user_comparator_->Compare(ikey.user_key, saved_key_) < 0) {
+          // We encountered a non-deleted value in entries for previous keys,
+          break;
+        }
+        value_type = ikey.type;
+        if (value_type == kTypeDeletion) {
+          saved_key_.clear();
+          ClearSavedValue();
+        } else {
+          Slice raw_value = iter_->value();
+          if (saved_value_.capacity() > raw_value.size() + 1048576) {
+            std::string empty;
+            swap(empty, saved_value_);
+          }
+          SaveKey(ExtractUserKey(iter_->key()), &saved_key_);
+          saved_value_.assign(raw_value.data(), raw_value.size());
+        }
+      }
+      iter_->Prev();
+    } while (iter_->Valid());
+  }
+
+  if (value_type == kTypeDeletion) {
+    // End
+    valid_ = false;
+    saved_key_.clear();
+    ClearSavedValue();
+    direction_ = kForward;
+  } else {
+    valid_ = true;
+  }
+}
+
+void DBIter::Seek(const Slice& target) {
+  direction_ = kForward;
+  ClearSavedValue();
+  saved_key_.clear();
+  AppendInternalKey(
+      &saved_key_, ParsedInternalKey(target, sequence_, kValueTypeForSeek));
+  iter_->Seek(saved_key_);
+  if (iter_->Valid()) {
+    FindNextUserEntry(false, &saved_key_ /* temporary storage */);
+  } else {
+    valid_ = false;
+  }
+}
+
+void DBIter::SeekToFirst() {
+  direction_ = kForward;
+  ClearSavedValue();
+  iter_->SeekToFirst();
+  if (iter_->Valid()) {
+    FindNextUserEntry(false, &saved_key_ /* temporary storage */);
+  } else {
+    valid_ = false;
+  }
+}
+
+void DBIter::SeekToLast() {
+  direction_ = kReverse;
+  ClearSavedValue();
+  iter_->SeekToLast();
+  FindPrevUserEntry();
+}
+
+}  // anonymous namespace
+
+Iterator* NewDBIterator(
+    DBImpl* db,
+    const Comparator* user_key_comparator,
+    Iterator* internal_iter,
+    SequenceNumber sequence,
+    uint32_t seed) {
+  return new DBIter(db, user_key_comparator, internal_iter, sequence, seed);
+}
+
+}  // namespace leveldb
+
+
+namespace leveldb {
+
+namespace {
+
+class FileState {
+ public:
+  // FileStates are reference counted. The initial reference count is zero
+  // and the caller must call Ref() at least once.
+  FileState() : refs_(0), size_(0) {}
+
+  // Increase the reference count.
+  void Ref() {
+    MutexLock lock(&refs_mutex_);
+    ++refs_;
+  }
+
+  // Decrease the reference count. Delete if this is the last reference.
+  void Unref() {
+    bool do_delete = false;
+
+    {
+      MutexLock lock(&refs_mutex_);
+      --refs_;
+      assert(refs_ >= 0);
+      if (refs_ <= 0) {
+        do_delete = true;
+      }
+    }
+
+    if (do_delete) {
+      delete this;
+    }
+  }
+
+  uint64_t Size() const { return size_; }
+
+  Status Read(uint64_t offset, size_t n, Slice* result, char* scratch) const {
+    if (offset > size_) {
+      return Status::IOError("Offset greater than file size.");
+    }
+    const uint64_t available = size_ - offset;
+    if (n > available) {
+      n = static_cast<size_t>(available);
+    }
+    if (n == 0) {
+      *result = Slice();
+      return Status::OK();
+    }
+
+    assert(offset / kBlockSize <= SIZE_MAX);
+    size_t block = static_cast<size_t>(offset / kBlockSize);
+    size_t block_offset = offset % kBlockSize;
+
+    if (n <= kBlockSize - block_offset) {
+      // The requested bytes are all in the first block.
+      *result = Slice(blocks_[block] + block_offset, n);
+      return Status::OK();
+    }
+
+    size_t bytes_to_copy = n;
+    char* dst = scratch;
+
+    while (bytes_to_copy > 0) {
+      size_t avail = kBlockSize - block_offset;
+      if (avail > bytes_to_copy) {
+        avail = bytes_to_copy;
+      }
+      memcpy(dst, blocks_[block] + block_offset, avail);
+
+      bytes_to_copy -= avail;
+      dst += avail;
+      block++;
+      block_offset = 0;
+    }
+
+    *result = Slice(scratch, n);
+    return Status::OK();
+  }
+
+  Status Append(const Slice& data) {
+    const char* src = data.data();
+    size_t src_len = data.size();
+
+    while (src_len > 0) {
+      size_t avail;
+      size_t offset = size_ % kBlockSize;
+
+      if (offset != 0) {
+        // There is some room in the last block.
+        avail = kBlockSize - offset;
+      } else {
+        // No room in the last block; push new one.
+        blocks_.push_back(new char[kBlockSize]);
+        avail = kBlockSize;
+      }
+
+      if (avail > src_len) {
+        avail = src_len;
+      }
+      memcpy(blocks_.back() + offset, src, avail);
+      src_len -= avail;
+      src += avail;
+      size_ += avail;
+    }
+
+    return Status::OK();
+  }
+
+ private:
+  // Private since only Unref() should be used to delete it.
+  ~FileState() {
+    for (std::vector<char*>::iterator i = blocks_.begin(); i != blocks_.end();
+         ++i) {
+      delete [] *i;
+    }
+  }
+
+  // No copying allowed.
+  FileState(const FileState&);
+  void operator=(const FileState&);
+
+  port::Mutex refs_mutex_;
+  int refs_;  // Protected by refs_mutex_;
+
+  // The following fields are not protected by any mutex. They are only mutable
+  // while the file is being written, and concurrent access is not allowed
+  // to writable files.
+  std::vector<char*> blocks_;
+  uint64_t size_;
+
+  enum { kBlockSize = 8 * 1024 };
+};
+
+class SequentialFileImpl : public SequentialFile {
+ public:
+  explicit SequentialFileImpl(FileState* file) : file_(file), pos_(0) {
+    file_->Ref();
+  }
+
+  ~SequentialFileImpl() {
+    file_->Unref();
+  }
+
+  virtual Status Read(size_t n, Slice* result, char* scratch) {
+    Status s = file_->Read(pos_, n, result, scratch);
+    if (s.ok()) {
+      pos_ += result->size();
+    }
+    return s;
+  }
+
+  virtual Status Skip(uint64_t n) {
+    if (pos_ > file_->Size()) {
+      return Status::IOError("pos_ > file_->Size()");
+    }
+    const uint64_t available = file_->Size() - pos_;
+    if (n > available) {
+      n = available;
+    }
+    pos_ += n;
+    return Status::OK();
+  }
+
+ private:
+  FileState* file_;
+  uint64_t pos_;
+};
+
+class RandomAccessFileImpl : public RandomAccessFile {
+ public:
+  explicit RandomAccessFileImpl(FileState* file) : file_(file) {
+    file_->Ref();
+  }
+
+  ~RandomAccessFileImpl() {
+    file_->Unref();
+  }
+
+  virtual Status Read(uint64_t offset, size_t n, Slice* result,
+                      char* scratch) const {
+    return file_->Read(offset, n, result, scratch);
+  }
+
+ private:
+  FileState* file_;
+};
+
+class WritableFileImpl : public WritableFile {
+ public:
+  WritableFileImpl(FileState* file) : file_(file) {
+    file_->Ref();
+  }
+
+  ~WritableFileImpl() {
+    file_->Unref();
+  }
+
+  virtual Status Append(const Slice& data) {
+    return file_->Append(data);
+  }
+
+  virtual Status Close() { return Status::OK(); }
+  virtual Status Flush() { return Status::OK(); }
+  virtual Status Sync() { return Status::OK(); }
+
+ private:
+  FileState* file_;
+};
+
+class NoOpLogger : public Logger {
+ public:
+  virtual void Logv(const char* format, va_list ap) { }
+};
+
+class InMemoryEnv : public EnvWrapper {
+ public:
+  explicit InMemoryEnv(Env* base_env) : EnvWrapper(base_env) { }
+
+  virtual ~InMemoryEnv() {
+    for (FileSystem::iterator i = file_map_.begin(); i != file_map_.end(); ++i){
+      i->second->Unref();
+    }
+  }
+
+  // Partial implementation of the Env interface.
+  virtual Status NewSequentialFile(const std::string& fname,
+                                   SequentialFile** result) {
+    MutexLock lock(&mutex_);
+    if (file_map_.find(fname) == file_map_.end()) {
+      *result = NULL;
+      return Status::IOError(fname, "File not found");
+    }
+
+    *result = new SequentialFileImpl(file_map_[fname]);
+    return Status::OK();
+  }
+
+  virtual Status NewRandomAccessFile(const std::string& fname,
+                                     RandomAccessFile** result) {
+    MutexLock lock(&mutex_);
+    if (file_map_.find(fname) == file_map_.end()) {
+      *result = NULL;
+      return Status::IOError(fname, "File not found");
+    }
+
+    *result = new RandomAccessFileImpl(file_map_[fname]);
+    return Status::OK();
+  }
+
+  virtual Status NewWritableFile(const std::string& fname,
+                                 WritableFile** result) {
+    MutexLock lock(&mutex_);
+    if (file_map_.find(fname) != file_map_.end()) {
+      DeleteFileInternal(fname);
+    }
+
+    FileState* file = new FileState();
+    file->Ref();
+    file_map_[fname] = file;
+
+    *result = new WritableFileImpl(file);
+    return Status::OK();
+  }
+
+  virtual Status NewAppendableFile(const std::string& fname,
+                                   WritableFile** result) {
+    MutexLock lock(&mutex_);
+    FileState** sptr = &file_map_[fname];
+    FileState* file = *sptr;
+    if (file == NULL) {
+      file = new FileState();
+      file->Ref();
+    }
+    *result = new WritableFileImpl(file);
+    return Status::OK();
+  }
+
+  virtual bool FileExists(const std::string& fname) {
+    MutexLock lock(&mutex_);
+    return file_map_.find(fname) != file_map_.end();
+  }
+
+  virtual Status GetChildren(const std::string& dir,
+                             std::vector<std::string>* result) {
+    MutexLock lock(&mutex_);
+    result->clear();
+
+    for (FileSystem::iterator i = file_map_.begin(); i != file_map_.end(); ++i){
+      const std::string& filename = i->first;
+
+      if (filename.size() >= dir.size() + 1 && filename[dir.size()] == '/' &&
+          Slice(filename).starts_with(Slice(dir))) {
+        result->push_back(filename.substr(dir.size() + 1));
+      }
+    }
+
+    return Status::OK();
+  }
+
+  void DeleteFileInternal(const std::string& fname) {
+    if (file_map_.find(fname) == file_map_.end()) {
+      return;
+    }
+
+    file_map_[fname]->Unref();
+    file_map_.erase(fname);
+  }
+
+  virtual Status DeleteFile(const std::string& fname) {
+    MutexLock lock(&mutex_);
+    if (file_map_.find(fname) == file_map_.end()) {
+      return Status::IOError(fname, "File not found");
+    }
+
+    DeleteFileInternal(fname);
+    return Status::OK();
+  }
+
+  virtual Status CreateDir(const std::string& dirname) {
+    return Status::OK();
+  }
+
+  virtual Status DeleteDir(const std::string& dirname) {
+    return Status::OK();
+  }
+
+  virtual Status GetFileSize(const std::string& fname, uint64_t* file_size) {
+    MutexLock lock(&mutex_);
+    if (file_map_.find(fname) == file_map_.end()) {
+      return Status::IOError(fname, "File not found");
+    }
+
+    *file_size = file_map_[fname]->Size();
+    return Status::OK();
+  }
+
+  virtual Status RenameFile(const std::string& src,
+                            const std::string& target) {
+    MutexLock lock(&mutex_);
+    if (file_map_.find(src) == file_map_.end()) {
+      return Status::IOError(src, "File not found");
+    }
+
+    DeleteFileInternal(target);
+    file_map_[target] = file_map_[src];
+    file_map_.erase(src);
+    return Status::OK();
+  }
+
+  virtual Status LockFile(const std::string& fname, FileLock** lock) {
+    *lock = new FileLock;
+    return Status::OK();
+  }
+
+  virtual Status UnlockFile(FileLock* lock) {
+    delete lock;
+    return Status::OK();
+  }
+
+  virtual Status GetTestDirectory(std::string* path) {
+    *path = "/test";
+    return Status::OK();
+  }
+
+  virtual Status NewLogger(const std::string& fname, Logger** result) {
+    *result = new NoOpLogger;
+    return Status::OK();
+  }
+
+ private:
+  // Map from filenames to FileState objects, representing a simple file system.
+  typedef std::map<std::string, FileState*> FileSystem;
+  port::Mutex mutex_;
+  FileSystem file_map_;  // Protected by mutex_.
+};
+
+}  // namespace
+
+Env* NewMemEnv(Env* base_env) {
+  return new InMemoryEnv(base_env);
 }
 
 }  // namespace leveldb
