@@ -2135,9 +2135,15 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
         nTotalCache = std::min(nTotalCache, nMaxDbCache << 20); // total cache cannot be greater than nMaxDbcache
         int64_t nBlockTreeDBCache = nTotalCache / 8;
 
+        syslog(LOG_NOTICE, ("ivmc: datadir " + GetDataDir().string()).c_str());
+
         boost::filesystem::create_directories(GetDataDir() / "storage");
 
-        psmartcontracttree = new CBlockTreeDB(nBlockTreeDBCache, false, false, GetDataDir() / "storage" / "index");
+        syslog(LOG_NOTICE, "ivmc: CBlockTreeDB");
+
+        psmartcontracttree = new CBlockTreeDB(nBlockTreeDBCache, true, false, GetDataDir() / "storage" / "index");
+
+        syslog(LOG_NOTICE, "ivmc: WriteTxIndex");
 
         psmartcontracttree->WriteTxIndex(vPos);
 
@@ -2703,20 +2709,27 @@ CDBWrapper::CDBWrapper(const boost::filesystem::path& path, size_t nCacheSize, b
     options = GetOptions(nCacheSize);
     options.create_if_missing = true;
     if (fMemory) {
+        syslog(LOG_NOTICE, "ivmc: fMemory");
         penv = leveldb::NewMemEnv(leveldb::Env::Default());
         options.env = penv;
     } else {
         if (fWipe) {
+            syslog(LOG_NOTICE, "ivmc: fWipe");
             LogPrintf("Wiping LevelDB in %s\n", path.string());
             leveldb::Status result = leveldb::DestroyDB(path.string(), options);
             dbwrapper_private::HandleError(result);
         }
         TryCreateDirectory(path);
+        syslog(LOG_NOTICE, "ivmc: TryCreateDirectory");
+
         LogPrintf("Opening LevelDB in %s\n", path.string());
+        syslog(LOG_NOTICE, ("ivmc: path " + path.string()).c_str());
     }
     leveldb::Status status = leveldb::DB::Open(options, path.string(), &pdb);
     dbwrapper_private::HandleError(status);
+
     LogPrintf("Opened LevelDB successfully\n");
+    syslog(LOG_NOTICE, "ivmc: Opened LevelDB successfully");
 
     // The base-case obfuscation key, which is a noop.
     obfuscate_key = std::vector<unsigned char>(OBFUSCATE_KEY_NUM_BYTES, '\000');
@@ -5058,25 +5071,39 @@ Options SanitizeOptions(const std::string& dbname,
                         const InternalKeyComparator* icmp,
                         const InternalFilterPolicy* ipolicy,
                         const Options& src) {
+  syslog(LOG_NOTICE, "ivmc: SanitizeOptions::Init");
   Options result = src;
   result.comparator = icmp;
   result.filter_policy = (src.filter_policy != NULL) ? ipolicy : NULL;
   ClipToRange(&result.max_open_files,    64 + kNumNonTableCacheFiles, 50000);
   ClipToRange(&result.write_buffer_size, 64<<10,                      1<<30);
   ClipToRange(&result.block_size,        1<<10,                       4<<20);
+
+  syslog(LOG_NOTICE, "ivmc: SanitizeOptions::ClipToRange");
   if (result.info_log == NULL) {
+    syslog(LOG_NOTICE, ("ivmc: SanitizeOptions::info_log 1 " + dbname).c_str());
+    if(!src.env){
+      syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log Null");
+    }
     // Open a log file in the same directory as the db
     src.env->CreateDir(dbname);  // In case it does not exist
+    syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log 2");
     src.env->RenameFile(InfoLogFileName(dbname), OldInfoLogFileName(dbname));
+    syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log 3");
     Status s = src.env->NewLogger(InfoLogFileName(dbname), &result.info_log);
+    syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log 4");
     if (!s.ok()) {
       // No place suitable for logging
       result.info_log = NULL;
     }
+    syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log 5");
   }
   if (result.block_cache == NULL) {
+    syslog(LOG_NOTICE, "ivmc: SanitizeOptions::NewLRUCache 1");
     result.block_cache = NewLRUCache(8 << 20);
+    syslog(LOG_NOTICE, "ivmc: SanitizeOptions::NewLRUCache 2");
   }
+  syslog(LOG_NOTICE, "ivmc: SanitizeOptions::End");
   return result;
 }
 
@@ -5101,14 +5128,20 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       tmp_batch_(new WriteBatch),
       bg_compaction_scheduled_(false),
       manual_compaction_(NULL) {
+
+  syslog(LOG_NOTICE, "ivmc: DBImpl");
+
   has_imm_.Release_Store(NULL);
+  syslog(LOG_NOTICE, "ivmc: DBImpl Release_Store");
 
   // Reserve ten files or so for other uses and give the rest to TableCache.
   const int table_cache_size = options_.max_open_files - kNumNonTableCacheFiles;
   table_cache_ = new TableCache(dbname_, &options_, table_cache_size);
+  syslog(LOG_NOTICE, "ivmc: DBImpl TableCache");
 
   versions_ = new VersionSet(dbname_, &options_, table_cache_,
                              &internal_comparator_);
+  syslog(LOG_NOTICE, "ivmc: DBImpl VersionSet");
 }
 
 DBImpl::~DBImpl() {
@@ -6456,10 +6489,15 @@ DB::~DB() { }
 Status DB::Open(const Options& options, const std::string& dbname,
                 DB** dbptr) {
   *dbptr = NULL;
+  syslog(LOG_NOTICE, "ivmc: DB::Open");
 
   DBImpl* impl = new DBImpl(options, dbname);
+  syslog(LOG_NOTICE, "ivmc: DB::Open DBImpl");
+
   impl->mutex_.Lock();
   VersionEdit edit;
+  syslog(LOG_NOTICE, "ivmc: DB::Open mutex_");
+
   // Recover handles create_if_missing, error_if_exists
   bool save_manifest = false;
   Status s = impl->Recover(&edit, &save_manifest);
@@ -6469,6 +6507,8 @@ Status DB::Open(const Options& options, const std::string& dbname,
     WritableFile* lfile;
     s = options.env->NewWritableFile(LogFileName(dbname, new_log_number),
                                      &lfile);
+
+    syslog(LOG_NOTICE, "ivmc: DB::Open NewWritableFile");
     if (s.ok()) {
       edit.SetLogNumber(new_log_number);
       impl->logfile_ = lfile;
