@@ -5085,16 +5085,18 @@ Options SanitizeOptions(const std::string& dbname,
     if(!src.env){
       syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log Null");
     }
-    // Open a log file in the same directory as the db
-    src.env->CreateDir(dbname);  // In case it does not exist
-    syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log 2");
-    src.env->RenameFile(InfoLogFileName(dbname), OldInfoLogFileName(dbname));
-    syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log 3");
-    Status s = src.env->NewLogger(InfoLogFileName(dbname), &result.info_log);
-    syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log 4");
-    if (!s.ok()) {
-      // No place suitable for logging
-      result.info_log = NULL;
+    else {
+      // Open a log file in the same directory as the db
+      src.env->CreateDir(dbname);  // In case it does not exist
+      syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log 2");
+      src.env->RenameFile(InfoLogFileName(dbname), OldInfoLogFileName(dbname));
+      syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log 3");
+      Status s = src.env->NewLogger(InfoLogFileName(dbname), &result.info_log);
+      syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log 4");
+      if (!s.ok()) {
+        // No place suitable for logging
+        result.info_log = NULL;
+      }
     }
     syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log 5");
   }
@@ -6501,7 +6503,7 @@ Status DB::Open(const Options& options, const std::string& dbname,
   // Recover handles create_if_missing, error_if_exists
   bool save_manifest = false;
   Status s = impl->Recover(&edit, &save_manifest);
-  if (s.ok() && impl->mem_ == NULL) {
+  if (s.ok() && impl->mem_ == NULL && options.env) {
     // Create new log and a corresponding memtable.
     uint64_t new_log_number = impl->versions_->NewFileNumber();
     WritableFile* lfile;
