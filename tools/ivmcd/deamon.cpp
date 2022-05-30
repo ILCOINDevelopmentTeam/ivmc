@@ -2129,20 +2129,7 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
         constexpr ivmc::address create_address = 0xc9ea7ed000000000000000000000000000000001_address;
         vPos.push_back(std::make_pair(create_address, pos));
 
-        // cache size calculations
-        int64_t nTotalCache = nDefaultDbCache;
-        nTotalCache = std::max(nTotalCache, nMinDbCache << 20); // total cache cannot be less than nMinDbCache
-        nTotalCache = std::min(nTotalCache, nMaxDbCache << 20); // total cache cannot be greater than nMaxDbcache
-        int64_t nBlockTreeDBCache = nTotalCache / 8;
-
-        syslog(LOG_NOTICE, ("ivmc: datadir " + GetDataDir().string()).c_str());
-
-        boost::filesystem::create_directories(GetDataDir() / "storage");
-
-        syslog(LOG_NOTICE, "ivmc: CBlockTreeDB");
-
-        psmartcontracttree = new CBlockTreeDB(nBlockTreeDBCache, true, false, GetDataDir() / "storage" / "index");
-
+        //
         syslog(LOG_NOTICE, "ivmc: WriteTxIndex");
 
         psmartcontracttree->WriteTxIndex(vPos);
@@ -11832,6 +11819,26 @@ bool TryCreateDirectory(const boost::filesystem::path& p)
     return false;
 }
 
+// ------------------------------- InitDB
+bool InitDB()
+{
+  // cache size calculations
+  int64_t nTotalCache = nDefaultDbCache;
+  nTotalCache = std::max(nTotalCache, nMinDbCache << 20); // total cache cannot be less than nMinDbCache
+  nTotalCache = std::min(nTotalCache, nMaxDbCache << 20); // total cache cannot be greater than nMaxDbcache
+  int64_t nBlockTreeDBCache = nTotalCache / 8;
+
+  syslog(LOG_NOTICE, ("ivmc: datadir " + GetDataDir().string()).c_str());
+
+  boost::filesystem::create_directories(GetDataDir() / "storage");
+
+  syslog(LOG_NOTICE, "ivmc: CBlockTreeDB");
+
+  psmartcontracttree = new CBlockTreeDB(nBlockTreeDBCache, true, false, GetDataDir() / "storage" / "index");
+
+  return true;
+}
+
 namespace
 {
   void do_heartbeat(int count)
@@ -11910,6 +11917,8 @@ int main(int argc, const char** argv)
   if (!StartHTTPServer())
       return false;
   if (!InitIVMC())
+      return false;
+  if (!InitDB())
       return false;
 
   SetRPCWarmupFinished();
