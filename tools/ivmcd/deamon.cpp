@@ -58,6 +58,10 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/chrono/chrono.hpp>
 
+#include <boost/assign/std/vector.hpp> // for 'operator+=()'
+#include <boost/assert.hpp>
+#include <boost/test/unit_test.hpp>
+
 #include "leveldb/cache.h"
 #include "leveldb/comparator.h"
 #include "leveldb/env.h"
@@ -68,6 +72,7 @@
 #include "leveldb/db/db_impl.h"
 #include "leveldb/options.h"
 #include "leveldb/iterator.h"
+#include "leveldb/write_batch.h"
 #include "leveldb/db/builder.h"
 #include "leveldb/db/db_iter.h"
 #include "leveldb/db/dbformat.h"
@@ -90,6 +95,7 @@
 #include "leveldb/util/posix_logger.h"
 #include "leveldb/util/crc32c.h"
 #include "leveldb/util/random.h"
+#include "leveldb/util/testharness.h"
 #include "leveldb/port/port.h"
 #include "leveldb/port/port_posix.h"
 #include "leveldb/table/block.h"
@@ -2703,6 +2709,7 @@ static leveldb::Options GetOptions(size_t nCacheSize)
         // on corruption in later versions.
         options.paranoid_checks = true;
     }
+    options.env = leveldb::NewMemEnv(leveldb::Env::Default());
     return options;
 }
 
@@ -6495,8 +6502,7 @@ Status DB::Delete(const WriteOptions& opt, const Slice& key) {
 
 DB::~DB() { }
 
-Status DB::Open(const Options& options, const std::string& dbname,
-                DB** dbptr) {
+Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   *dbptr = NULL;
   syslog(LOG_NOTICE, "ivmc: DB::Open");
 
@@ -11500,6 +11506,73 @@ Env* NewMemEnv(Env* base_env) {
 
 }  // namespace leveldb
 
+namespace leveldb {
+namespace test {
+
+namespace {
+struct Test {
+  const char* base;
+  const char* name;
+  void (*func)();
+};
+std::vector<Test>* tests;
+}
+
+bool RegisterTest(const char* base, const char* name, void (*func)()) {
+  if (tests == NULL) {
+    tests = new std::vector<Test>;
+  }
+  Test t;
+  t.base = base;
+  t.name = name;
+  t.func = func;
+  tests->push_back(t);
+  return true;
+}
+
+int RunAllTests() {
+  const char* matcher = getenv("LEVELDB_TESTS");
+
+  int num = 0;
+  if (tests != NULL) {
+    for (size_t i = 0; i < tests->size(); i++) {
+      const Test& t = (*tests)[i];
+      if (matcher != NULL) {
+        std::string name = t.base;
+        name.push_back('.');
+        name.append(t.name);
+        if (strstr(name.c_str(), matcher) == NULL) {
+          continue;
+        }
+      }
+      fprintf(stderr, "==== Test %s.%s\n", t.base, t.name);
+      (*t.func)();
+      ++num;
+    }
+  }
+  fprintf(stderr, "==== PASSED %d tests\n", num);
+  return 0;
+}
+
+std::string TmpDir() {
+  std::string dir;
+  Status s = Env::Default()->GetTestDirectory(&dir);
+  ASSERT_TRUE(s.ok()) << s.ToString();
+  return dir;
+}
+
+int RandomSeed() {
+  const char* env = getenv("TEST_RANDOM_SEED");
+  int result = (env != NULL ? atoi(env) : 301);
+  if (result <= 0) {
+    result = 301;
+  }
+  return result;
+}
+
+}  // namespace test
+}  // namespace leveldb
+
 void memory_cleanse(void *ptr, size_t len)
 {
     OPENSSL_cleanse(ptr, len);
@@ -11854,21 +11927,85 @@ bool TryCreateDirectory(const boost::filesystem::path& p)
 }
 
 // ------------------------------- InitDB
+// Test if a string consists entirely of null characters
+bool is_null_key(const std::vector<unsigned char>& key) {
+    bool isnull = true;
+
+    for (unsigned int i = 0; i < key.size(); i++)
+        isnull &= (key[i] == '\x00');
+
+    return isnull;
+}
+
+const int kNumKeys = 1100000;
+
+std::string Key1(int i) {
+  char buf[100];
+  snprintf(buf, sizeof(buf), "my_key_%d", i);
+  return buf;
+}
+
+std::string Key2(int i) {
+  return Key1(i) + "_xxx";
+}
+
+class Issue178 { };
+
 bool InitDB()
 {
-  // cache size calculations
-  int64_t nTotalCache = nDefaultDbCache;
-  nTotalCache = std::max(nTotalCache, nMinDbCache << 20); // total cache cannot be less than nMinDbCache
-  nTotalCache = std::min(nTotalCache, nMaxDbCache << 20); // total cache cannot be greater than nMaxDbcache
-  int64_t nBlockTreeDBCache = nTotalCache / 8;
+  syslog(LOG_NOTICE, "ivmc: CDBWrapper Test 1");
+  // We're going to share this boost::filesystem::path between two wrappers
+  boost::filesystem::path ph = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path();
+  create_directories(ph);
 
-  syslog(LOG_NOTICE, ("ivmc: datadir " + GetDataDir().string()).c_str());
+  // Set up a non-obfuscated wrapper to write some initial data.
+  CDBWrapper* dbw = new CDBWrapper(ph, (1 << 10), false, false, false);
+  char key = 'k';
+  ivmc::address in = GetRandHash();
+  ivmc::address res;
 
-  boost::filesystem::create_directories(GetDataDir() / "storage");
+  BOOST_CHECK(dbw->Write(key, in));
+  // BOOST_CHECK(dbw->Read(key, res));
+  // BOOST_CHECK_EQUAL(res.ToString(), in.ToString());
 
-  syslog(LOG_NOTICE, "ivmc: CBlockTreeDB");
+  // Call the destructor to free leveldb LOCK
+  delete dbw;
 
-  psmartcontracttree = new CBlockTreeDB(nBlockTreeDBCache, true, false, GetDataDir() / "storage" / "index");
+  // Now, set up another wrapper that wants to obfuscate the same directory
+  CDBWrapper odbw(ph, (1 << 10), false, false, true);
+
+  // Check that the key/val we wrote with unobfuscated wrapper exists and
+  // is readable.
+  ivmc::address res2;
+  // BOOST_CHECK(odbw.Read(key, res2));
+  // BOOST_CHECK_EQUAL(res2.ToString(), in.ToString());
+
+  BOOST_CHECK(!odbw.IsEmpty()); // There should be existing data
+  BOOST_CHECK(is_null_key(dbwrapper_private::GetObfuscateKey(odbw))); // The key should be an empty string
+
+  ivmc::address in2 = GetRandHash();
+  ivmc::address res3;
+
+  // Check that we can write successfully
+  BOOST_CHECK(odbw.Write(key, in2));
+  // BOOST_CHECK(odbw.Read(key, res3));
+  // BOOST_CHECK_EQUAL(res3.ToString(), in2.ToString());
+  syslog(LOG_NOTICE, "ivmc: CDBWrapper Test 2");
+
+  // // cache size calculations
+  // int64_t nTotalCache = nDefaultDbCache;
+  // nTotalCache = std::max(nTotalCache, nMinDbCache << 20); // total cache cannot be less than nMinDbCache
+  // nTotalCache = std::min(nTotalCache, nMaxDbCache << 20); // total cache cannot be greater than nMaxDbcache
+  // int64_t nBlockTreeDBCache = nTotalCache / 8;
+  // nBlockTreeDBCache = std::min(nBlockTreeDBCache, (nMaxBlockDBAndTxIndexCache) << 20);
+  //
+  // syslog(LOG_NOTICE, ("ivmc: datadir " + GetDataDir().string()).c_str());
+  //
+  // boost::filesystem::create_directories(GetDataDir() / "storage");
+  //
+  // syslog(LOG_NOTICE, "ivmc: CBlockTreeDB");
+  //
+  // psmartcontracttree = new CBlockTreeDB(nBlockTreeDBCache, false, false, GetDataDir() / "storage" / "index");
 
   return true;
 }
