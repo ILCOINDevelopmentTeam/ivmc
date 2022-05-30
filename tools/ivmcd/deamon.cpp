@@ -2112,27 +2112,47 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
         const auto code_hex = load_hex(code_arg);
         const auto input_hex = load_hex(input_arg);
         const auto storage_hex = load_hex(storage_arg);
+        std::string _out = "";
+
         // If code_hex or input_hex or storage_hex is not valid hex string an exception is thrown.
-        tooling::run2(vm, rev, gas, code_hex, input_hex, storage_hex, recipient_arg, sender_arg, std::cout);
+        tooling::run2(vm, rev, gas, code_hex, input_hex, storage_hex, recipient_arg, sender_arg, std::cout, _out);
 
         std::stringstream ss;
         ss << std::cout.rdbuf();
         std::string myString = ss.str();
 
-        syslog(LOG_NOTICE, ("ivmc: " + myString).c_str());
+        syslog(LOG_NOTICE, ("ivmc: run2 out " + _out).c_str());
         syslog(LOG_NOTICE, "ivmc: End execution");
 
-        CDiskBlockPos pos(0, ::GetSerializeSize(myString, SER_DISK, CLIENT_VERSION));
-        std::vector<std::pair<ivmc::address, CDiskBlockPos> > vPos;
+        size_t _size = ::GetSerializeSize(_out, SER_DISK, CLIENT_VERSION);
+        syslog(LOG_NOTICE, ("ivmc: GetSerializeSize " + std::to_string(_size)).c_str());
+
+        int nFile = 0;
+        CDiskBlockPos _pos(nFile, _size);
+
+        CDiskTxPos pos(_pos, _size);
+        // std::vector<std::pair<ivmc::address, CDiskTxPos> > vPos;
+        std::vector<std::pair<std::string, CDiskTxPos> > vPos;
         vPos.reserve(1);
 
         constexpr ivmc::address create_address = 0xc9ea7ed000000000000000000000000000000001_address;
-        vPos.push_back(std::make_pair(create_address, pos));
 
+        // int key_size_ = sizeof(msg.recipient.bytes) / sizeof(msg.recipient.bytes[0]);
+        // std::ostringstream convert;
+        // for (int a = 0; a < key_size_; a++) {
+        //     convert << std::hex << (int)msg.recipient.bytes[a];
+        // }
         //
+        // std::string key_string = convert.str();
+        // out << "Address:   " << key_string << "\n";
+
+        vPos.push_back(std::make_pair("0xc9ea7ed000000000000000000000000000000001", pos));
+
+        // WriteTxIndex
         syslog(LOG_NOTICE, "ivmc: WriteTxIndex");
 
-        psmartcontracttree->WriteTxIndex(vPos);
+        if (!psmartcontracttree->WriteTxIndex(vPos))
+            syslog(LOG_NOTICE, "ivmc: Failed to write transaction index");
 
         return 0;
     }
@@ -11503,6 +11523,20 @@ CBlockTreeDB::CBlockTreeDB(size_t nCacheSize, bool fMemory, bool fWipe, const bo
 bool CBlockTreeDB::WriteTxIndex(const std::vector<std::pair<ivmc::address, CDiskBlockPos> >&vect) {
     CDBBatch batch(*this);
     for (std::vector<std::pair<ivmc::address,CDiskBlockPos> >::const_iterator it=vect.begin(); it!=vect.end(); it++)
+        batch.Write(std::make_pair(DB_TXINDEX, it->first), it->second);
+    return WriteBatch(batch);
+}
+
+bool CBlockTreeDB::WriteTxIndex(const std::vector<std::pair<ivmc::address, CDiskTxPos> >&vect) {
+    CDBBatch batch(*this);
+    for (std::vector<std::pair<ivmc::address,CDiskTxPos> >::const_iterator it=vect.begin(); it!=vect.end(); it++)
+        batch.Write(std::make_pair(DB_TXINDEX, it->first), it->second);
+    return WriteBatch(batch);
+}
+
+bool CBlockTreeDB::WriteTxIndex(const std::vector<std::pair<std::string, CDiskTxPos> >&vect) {
+    CDBBatch batch(*this);
+    for (std::vector<std::pair<std::string,CDiskTxPos> >::const_iterator it=vect.begin(); it!=vect.end(); it++)
         batch.Write(std::make_pair(DB_TXINDEX, it->first), it->second);
     return WriteBatch(batch);
 }

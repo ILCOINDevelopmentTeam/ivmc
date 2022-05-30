@@ -29,5 +29,6 @@ int run2(ivmc::VM& vm,
         const std::string& storage_hex,
         const std::string& recipient,
         const std::string& sender,
-        std::ostream& out);
+        std::ostream& out,
+        std::string& _out);
 }  // namespace ivmc::tooling

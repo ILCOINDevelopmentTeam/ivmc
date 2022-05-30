@@ -261,7 +261,8 @@ int run2(ivmc::VM& vm,
         const std::string& storage_hex,
         const std::string& recipient,
         const std::string& sender,
-        std::ostream& out)
+        std::ostream& out,
+        std::string& _out)
 {
     out << "Executing on " << rev << " with " << gas << " gas limit\n";
 
@@ -349,6 +350,7 @@ int run2(ivmc::VM& vm,
     if (result.status_code == IVMC_SUCCESS || result.status_code == IVMC_REVERT){
       out << "Output:   " << hex({result.output_data, result.output_size}) << "\n";
       syslog(LOG_NOTICE, ("Output: " + hex({result.output_data, result.output_size})).c_str());
+      _out = hex({result.output_data, result.output_size});
     }
 
     if(host2.account_exists(msg.recipient)){
