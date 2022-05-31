@@ -10,6 +10,7 @@
 #include <functional>
 #include <initializer_list>
 #include <ostream>
+#include <sstream>
 #include <utility>
 
 static_assert(IVMC_LATEST_STABLE_REVISION <= IVMC_MAX_REVISION,
@@ -58,6 +59,17 @@ struct address : ivmc_address
 
     /// Explicit operator converting to bool.
     inline constexpr explicit operator bool() const noexcept;
+
+    std::string ToString(){
+      int key_size_ = sizeof(bytes) / sizeof(bytes[0]);
+      std::ostringstream convert;
+      for (int a = 0; a < key_size_; a++) {
+          convert << std::hex << (int)bytes[a];
+      }
+
+      std::string key_string = convert.str();
+      return key_string;
+    }
 };
 
 /// The fixed size array of 32 bytes for storing 256-bit EVM values.

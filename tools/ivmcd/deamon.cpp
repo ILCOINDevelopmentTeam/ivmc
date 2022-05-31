@@ -11965,8 +11965,8 @@ bool InitDB()
   ivmc::address res;
 
   BOOST_CHECK(dbw->Write(key, in));
-  // BOOST_CHECK(dbw->Read(key, res));
-  // BOOST_CHECK_EQUAL(res.ToString(), in.ToString());
+  BOOST_CHECK(dbw->Read(key, res));
+  BOOST_CHECK_EQUAL(res.ToString(), in.ToString());
 
   // Call the destructor to free leveldb LOCK
   delete dbw;
@@ -11977,8 +11977,8 @@ bool InitDB()
   // Check that the key/val we wrote with unobfuscated wrapper exists and
   // is readable.
   ivmc::address res2;
-  // BOOST_CHECK(odbw.Read(key, res2));
-  // BOOST_CHECK_EQUAL(res2.ToString(), in.ToString());
+  BOOST_CHECK(odbw.Read(key, res2));
+  BOOST_CHECK_EQUAL(res2.ToString(), in.ToString());
 
   BOOST_CHECK(!odbw.IsEmpty()); // There should be existing data
   BOOST_CHECK(is_null_key(dbwrapper_private::GetObfuscateKey(odbw))); // The key should be an empty string
@@ -11988,24 +11988,26 @@ bool InitDB()
 
   // Check that we can write successfully
   BOOST_CHECK(odbw.Write(key, in2));
-  // BOOST_CHECK(odbw.Read(key, res3));
-  // BOOST_CHECK_EQUAL(res3.ToString(), in2.ToString());
+  BOOST_CHECK(odbw.Read(key, res3));
+  BOOST_CHECK_EQUAL(res3.ToString(), in2.ToString());
   syslog(LOG_NOTICE, "ivmc: CDBWrapper Test 2");
+  syslog(LOG_NOTICE, ("ivmc: CDBWrapper Test res3 " + res3.ToString()).c_str());
+  syslog(LOG_NOTICE, ("ivmc: CDBWrapper Test in2 " + in2.ToString()).c_str());
 
-  // // cache size calculations
-  // int64_t nTotalCache = nDefaultDbCache;
-  // nTotalCache = std::max(nTotalCache, nMinDbCache << 20); // total cache cannot be less than nMinDbCache
-  // nTotalCache = std::min(nTotalCache, nMaxDbCache << 20); // total cache cannot be greater than nMaxDbcache
-  // int64_t nBlockTreeDBCache = nTotalCache / 8;
-  // nBlockTreeDBCache = std::min(nBlockTreeDBCache, (nMaxBlockDBAndTxIndexCache) << 20);
-  //
-  // syslog(LOG_NOTICE, ("ivmc: datadir " + GetDataDir().string()).c_str());
-  //
-  // boost::filesystem::create_directories(GetDataDir() / "storage");
-  //
-  // syslog(LOG_NOTICE, "ivmc: CBlockTreeDB");
-  //
-  // psmartcontracttree = new CBlockTreeDB(nBlockTreeDBCache, false, false, GetDataDir() / "storage" / "index");
+  // cache size calculations
+  int64_t nTotalCache = nDefaultDbCache;
+  nTotalCache = std::max(nTotalCache, nMinDbCache << 20); // total cache cannot be less than nMinDbCache
+  nTotalCache = std::min(nTotalCache, nMaxDbCache << 20); // total cache cannot be greater than nMaxDbcache
+  int64_t nBlockTreeDBCache = nTotalCache / 8;
+  nBlockTreeDBCache = std::min(nBlockTreeDBCache, (nMaxBlockDBAndTxIndexCache) << 20);
+
+  syslog(LOG_NOTICE, ("ivmc: datadir " + GetDataDir().string()).c_str());
+
+  boost::filesystem::create_directories(GetDataDir() / "storage");
+
+  syslog(LOG_NOTICE, "ivmc: CBlockTreeDB");
+
+  psmartcontracttree = new CBlockTreeDB(nBlockTreeDBCache, false, false, GetDataDir() / "storage" / "index");
 
   return true;
 }

@@ -78,14 +78,13 @@ template<typename Stream> inline void ser_writedata32(Stream &s, uint32_t obj)
     obj = htole32(obj);
     s.write((char*)&obj, 4);
 }
+template<typename Stream> inline void ser_writedataaddress(Stream &s, ivmc::address obj)
+{
+    s.write((char*)&obj, 5);
+}
 template<typename Stream> inline void ser_writedata64(Stream &s, uint64_t obj)
 {
     obj = htole64(obj);
-    s.write((char*)&obj, 8);
-}
-template<typename Stream> inline void ser_writedataaddress(Stream &s, ivmc::address obj)
-{
-    obj = obj;
     s.write((char*)&obj, 8);
 }
 template<typename Stream> inline uint8_t ser_readdata8(Stream &s)
@@ -105,6 +104,12 @@ template<typename Stream> inline uint32_t ser_readdata32(Stream &s)
     uint32_t obj;
     s.read((char*)&obj, 4);
     return le32toh(obj);
+}
+template<typename Stream> inline ivmc::address ser_readdataaddress(Stream &s)
+{
+    ivmc::address obj;
+    s.read((char*)&obj, 5);
+    return obj;
 }
 template<typename Stream> inline uint64_t ser_readdata64(Stream &s)
 {
@@ -197,6 +202,7 @@ template<typename Stream> inline void Unserialize(Stream& s, int64_t& a ) { a = 
 template<typename Stream> inline void Unserialize(Stream& s, uint64_t& a) { a = ser_readdata64(s); }
 template<typename Stream> inline void Unserialize(Stream& s, float& a   ) { a = ser_uint32_to_float(ser_readdata32(s)); }
 template<typename Stream> inline void Unserialize(Stream& s, double& a  ) { a = ser_uint64_to_double(ser_readdata64(s)); }
+template<typename Stream> inline void Unserialize(Stream& s, ivmc::address& a ) { a = ser_readdataaddress(s); }
 
 template<typename Stream> inline void Serialize(Stream& s, bool a)    { char f=a; ser_writedata8(s, f); }
 template<typename Stream> inline void Unserialize(Stream& s, bool& a) { char f=ser_readdata8(s); a=f; }
