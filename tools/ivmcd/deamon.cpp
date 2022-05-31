@@ -11925,46 +11925,46 @@ class Issue178 { };
 
 bool InitDB()
 {
-  syslog(LOG_NOTICE, "ivmc: CDBWrapper Test 1");
-  // We're going to share this boost::filesystem::path between two wrappers
-  boost::filesystem::path ph = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path();
-  create_directories(ph);
-
-  // Set up a non-obfuscated wrapper to write some initial data.
-  CDBWrapper* dbw = new CDBWrapper(ph, (1 << 10), false, false, false);
-  char key = 'k';
-  ivmc::address in = GetRandHash();
-  ivmc::address res;
-
-  BOOST_CHECK(dbw->Write(key, in));
-  BOOST_CHECK(dbw->Read(key, res));
-  BOOST_CHECK_EQUAL(res.ToString(), in.ToString());
-
-  // Call the destructor to free leveldb LOCK
-  delete dbw;
-
-  // Now, set up another wrapper that wants to obfuscate the same directory
-  CDBWrapper odbw(ph, (1 << 10), false, false, true);
-
-  // Check that the key/val we wrote with unobfuscated wrapper exists and
-  // is readable.
-  ivmc::address res2;
-  BOOST_CHECK(odbw.Read(key, res2));
-  BOOST_CHECK_EQUAL(res2.ToString(), in.ToString());
-
-  BOOST_CHECK(!odbw.IsEmpty()); // There should be existing data
-  BOOST_CHECK(is_null_key(dbwrapper_private::GetObfuscateKey(odbw))); // The key should be an empty string
-
-  ivmc::address in2 = GetRandHash();
-  ivmc::address res3;
-
-  // Check that we can write successfully
-  BOOST_CHECK(odbw.Write(key, in2));
-  BOOST_CHECK(odbw.Read(key, res3));
-  BOOST_CHECK_EQUAL(res3.ToString(), in2.ToString());
-  syslog(LOG_NOTICE, "ivmc: CDBWrapper Test 2");
-  syslog(LOG_NOTICE, ("ivmc: CDBWrapper Test res3 " + res3.ToString()).c_str());
-  syslog(LOG_NOTICE, ("ivmc: CDBWrapper Test in2 " + in2.ToString()).c_str());
+  // syslog(LOG_NOTICE, "ivmc: CDBWrapper Test 1");
+  // // We're going to share this boost::filesystem::path between two wrappers
+  // boost::filesystem::path ph = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path();
+  // create_directories(ph);
+  //
+  // // Set up a non-obfuscated wrapper to write some initial data.
+  // CDBWrapper* dbw = new CDBWrapper(ph, (1 << 10), false, false, false);
+  // char key = 'k';
+  // ivmc::address in = GetRandHash();
+  // ivmc::address res;
+  //
+  // BOOST_CHECK(dbw->Write(key, in));
+  // BOOST_CHECK(dbw->Read(key, res));
+  // BOOST_CHECK_EQUAL(res.ToString(), in.ToString());
+  //
+  // // Call the destructor to free leveldb LOCK
+  // delete dbw;
+  //
+  // // Now, set up another wrapper that wants to obfuscate the same directory
+  // CDBWrapper odbw(ph, (1 << 10), false, false, true);
+  //
+  // // Check that the key/val we wrote with unobfuscated wrapper exists and
+  // // is readable.
+  // ivmc::address res2;
+  // BOOST_CHECK(odbw.Read(key, res2));
+  // BOOST_CHECK_EQUAL(res2.ToString(), in.ToString());
+  //
+  // BOOST_CHECK(!odbw.IsEmpty()); // There should be existing data
+  // BOOST_CHECK(is_null_key(dbwrapper_private::GetObfuscateKey(odbw))); // The key should be an empty string
+  //
+  // ivmc::address in2 = GetRandHash();
+  // ivmc::address res3;
+  //
+  // // Check that we can write successfully
+  // BOOST_CHECK(odbw.Write(key, in2));
+  // BOOST_CHECK(odbw.Read(key, res3));
+  // BOOST_CHECK_EQUAL(res3.ToString(), in2.ToString());
+  // syslog(LOG_NOTICE, "ivmc: CDBWrapper Test 2");
+  // syslog(LOG_NOTICE, ("ivmc: CDBWrapper Test res3 " + res3.ToString()).c_str());
+  // syslog(LOG_NOTICE, ("ivmc: CDBWrapper Test in2 " + in2.ToString()).c_str());
 
   // cache size calculations
   int64_t nTotalCache = nDefaultDbCache;
