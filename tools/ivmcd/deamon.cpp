@@ -5085,41 +5085,25 @@ Options SanitizeOptions(const std::string& dbname,
                         const InternalKeyComparator* icmp,
                         const InternalFilterPolicy* ipolicy,
                         const Options& src) {
-  syslog(LOG_NOTICE, "ivmc: SanitizeOptions::Init");
   Options result = src;
   result.comparator = icmp;
   result.filter_policy = (src.filter_policy != NULL) ? ipolicy : NULL;
   ClipToRange(&result.max_open_files,    64 + kNumNonTableCacheFiles, 50000);
   ClipToRange(&result.write_buffer_size, 64<<10,                      1<<30);
   ClipToRange(&result.block_size,        1<<10,                       4<<20);
-
-  syslog(LOG_NOTICE, "ivmc: SanitizeOptions::ClipToRange");
   if (result.info_log == NULL) {
-    syslog(LOG_NOTICE, ("ivmc: SanitizeOptions::info_log 1 " + dbname).c_str());
-    if(!src.env){
-      syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log Null");
+    // Open a log file in the same directory as the db
+    src.env->CreateDir(dbname);  // In case it does not exist
+    src.env->RenameFile(InfoLogFileName(dbname), OldInfoLogFileName(dbname));
+    Status s = src.env->NewLogger(InfoLogFileName(dbname), &result.info_log);
+    if (!s.ok()) {
+      // No place suitable for logging
+      result.info_log = NULL;
     }
-    else {
-      // Open a log file in the same directory as the db
-      src.env->CreateDir(dbname);  // In case it does not exist
-      syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log 2");
-      src.env->RenameFile(InfoLogFileName(dbname), OldInfoLogFileName(dbname));
-      syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log 3");
-      Status s = src.env->NewLogger(InfoLogFileName(dbname), &result.info_log);
-      syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log 4");
-      if (!s.ok()) {
-        // No place suitable for logging
-        result.info_log = NULL;
-      }
-    }
-    syslog(LOG_NOTICE, "ivmc: SanitizeOptions::info_log 5");
   }
   if (result.block_cache == NULL) {
-    syslog(LOG_NOTICE, "ivmc: SanitizeOptions::NewLRUCache 1");
     result.block_cache = NewLRUCache(8 << 20);
-    syslog(LOG_NOTICE, "ivmc: SanitizeOptions::NewLRUCache 2");
   }
-  syslog(LOG_NOTICE, "ivmc: SanitizeOptions::End");
   return result;
 }
 
@@ -5144,20 +5128,14 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       tmp_batch_(new WriteBatch),
       bg_compaction_scheduled_(false),
       manual_compaction_(NULL) {
-
-  syslog(LOG_NOTICE, "ivmc: DBImpl");
-
   has_imm_.Release_Store(NULL);
-  syslog(LOG_NOTICE, "ivmc: DBImpl Release_Store");
 
   // Reserve ten files or so for other uses and give the rest to TableCache.
   const int table_cache_size = options_.max_open_files - kNumNonTableCacheFiles;
   table_cache_ = new TableCache(dbname_, &options_, table_cache_size);
-  syslog(LOG_NOTICE, "ivmc: DBImpl TableCache");
 
   versions_ = new VersionSet(dbname_, &options_, table_cache_,
                              &internal_comparator_);
-  syslog(LOG_NOTICE, "ivmc: DBImpl VersionSet");
 }
 
 DBImpl::~DBImpl() {
@@ -6502,28 +6480,22 @@ Status DB::Delete(const WriteOptions& opt, const Slice& key) {
 
 DB::~DB() { }
 
-Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
+Status DB::Open(const Options& options, const std::string& dbname,
+                DB** dbptr) {
   *dbptr = NULL;
-  syslog(LOG_NOTICE, "ivmc: DB::Open");
 
   DBImpl* impl = new DBImpl(options, dbname);
-  syslog(LOG_NOTICE, "ivmc: DB::Open DBImpl");
-
   impl->mutex_.Lock();
   VersionEdit edit;
-  syslog(LOG_NOTICE, "ivmc: DB::Open mutex_");
-
   // Recover handles create_if_missing, error_if_exists
   bool save_manifest = false;
   Status s = impl->Recover(&edit, &save_manifest);
-  if (s.ok() && impl->mem_ == NULL && options.env) {
+  if (s.ok() && impl->mem_ == NULL) {
     // Create new log and a corresponding memtable.
     uint64_t new_log_number = impl->versions_->NewFileNumber();
     WritableFile* lfile;
     s = options.env->NewWritableFile(LogFileName(dbname, new_log_number),
                                      &lfile);
-
-    syslog(LOG_NOTICE, "ivmc: DB::Open NewWritableFile");
     if (s.ok()) {
       edit.SetLogNumber(new_log_number);
       impl->logfile_ = lfile;
