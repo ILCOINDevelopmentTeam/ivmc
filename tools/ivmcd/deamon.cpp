@@ -2664,9 +2664,9 @@ void StopHTTPRPC()
 static leveldb::Options GetOptions(size_t nCacheSize)
 {
     leveldb::Options options;
-    options.block_cache = leveldb::NewLRUCache(nCacheSize / 2);
+    // options.block_cache = leveldb::NewLRUCache(nCacheSize / 2);
     options.write_buffer_size = nCacheSize / 4; // up to two write buffers may be held in memory simultaneously
-    options.filter_policy = leveldb::NewBloomFilterPolicy(10);
+    // options.filter_policy = leveldb::NewBloomFilterPolicy(10);
     options.compression = leveldb::kNoCompression;
     options.max_open_files = 64;
     if (leveldb::kMajorVersion > 1 || (leveldb::kMajorVersion == 1 && leveldb::kMinorVersion >= 16)) {
@@ -2689,8 +2689,8 @@ CDBWrapper::CDBWrapper(const boost::filesystem::path& path, size_t nCacheSize, b
     options.create_if_missing = true;
     if (fMemory) {
         syslog(LOG_NOTICE, "ivmc: fMemory");
-        penv = leveldb::NewMemEnv(leveldb::Env::Default());
-        options.env = penv;
+        // penv = leveldb::NewMemEnv(leveldb::Env::Default());
+        // options.env = penv;
     } else {
         if (fWipe) {
             syslog(LOG_NOTICE, "ivmc: fWipe");
@@ -2734,12 +2734,12 @@ CDBWrapper::~CDBWrapper()
 {
     delete pdb;
     pdb = NULL;
-    delete options.filter_policy;
-    options.filter_policy = NULL;
-    delete options.block_cache;
-    options.block_cache = NULL;
-    delete penv;
-    options.env = NULL;
+    // delete options.filter_policy;
+    // options.filter_policy = NULL;
+    // delete options.block_cache;
+    // options.block_cache = NULL;
+    // delete penv;
+    // options.env = NULL;
 }
 
 bool CDBWrapper::WriteBatch(CDBBatch& batch, bool fSync)
@@ -2787,7 +2787,8 @@ void HandleError(const leveldb::Status& status)
 {
     if (status.ok())
         return;
-    LogPrintf("%s\n", status.ToString());
+    std::string _status = status.ToString();
+    LogPrintf("%s\n", _status);
     if (status.IsCorruption())
         throw dbwrapper_error("Database corrupted");
     if (status.IsIOError())
