@@ -2825,6 +2825,10 @@ static const char DB_LAST_BLOCK = 'l';
 CBlockTreeDB::CBlockTreeDB(size_t nCacheSize, bool fMemory, bool fWipe, const boost::filesystem::path& path) : CDBWrapper(path, nCacheSize, fMemory, fWipe) {
 }
 
+bool CBlockTreeDB::ReadTxIndex(const ivmc::address &txid, CDiskTxPos &pos) {
+    return Read(std::make_pair(DB_TXINDEX, txid), pos);
+}
+
 bool CBlockTreeDB::WriteTxIndex(const std::vector<std::pair<ivmc::address, CDiskBlockPos> >&vect) {
     CDBBatch batch(*this);
     for (std::vector<std::pair<ivmc::address,CDiskBlockPos> >::const_iterator it=vect.begin(); it!=vect.end(); it++)
@@ -3179,73 +3183,11 @@ void SetupEnvironment()
 }
 
 // ------------------------------- InitDB
-// Test if a string consists entirely of null characters
-bool is_null_key(const std::vector<unsigned char>& key) {
-    bool isnull = true;
-
-    for (unsigned int i = 0; i < key.size(); i++)
-        isnull &= (key[i] == '\x00');
-
-    return isnull;
-}
-
-const int kNumKeys = 1100000;
-
-std::string Key1(int i) {
-  char buf[100];
-  snprintf(buf, sizeof(buf), "my_key_%d", i);
-  return buf;
-}
-
-std::string Key2(int i) {
-  return Key1(i) + "_xxx";
-}
-
-class Issue178 { };
-
 bool InitDB()
 {
+  using ivmc::operator""_address;
+
   SetupEnvironment();
-  // syslog(LOG_NOTICE, "ivmc: CDBWrapper Test 1");
-  // // We're going to share this boost::filesystem::path between two wrappers
-  // boost::filesystem::path ph = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path();
-  // create_directories(ph);
-  //
-  // // Set up a non-obfuscated wrapper to write some initial data.
-  // CDBWrapper* dbw = new CDBWrapper(ph, (1 << 10), false, false, false);
-  // char key = 'k';
-  // ivmc::address in = GetRandHash();
-  // ivmc::address res;
-  //
-  // BOOST_CHECK(dbw->Write(key, in));
-  // BOOST_CHECK(dbw->Read(key, res));
-  // BOOST_CHECK_EQUAL(res.ToString(), in.ToString());
-  //
-  // // Call the destructor to free leveldb LOCK
-  // delete dbw;
-  //
-  // // Now, set up another wrapper that wants to obfuscate the same directory
-  // CDBWrapper odbw(ph, (1 << 10), false, false, true);
-  //
-  // // Check that the key/val we wrote with unobfuscated wrapper exists and
-  // // is readable.
-  // ivmc::address res2;
-  // BOOST_CHECK(odbw.Read(key, res2));
-  // BOOST_CHECK_EQUAL(res2.ToString(), in.ToString());
-  //
-  // BOOST_CHECK(!odbw.IsEmpty()); // There should be existing data
-  // BOOST_CHECK(is_null_key(dbwrapper_private::GetObfuscateKey(odbw))); // The key should be an empty string
-  //
-  // ivmc::address in2 = GetRandHash();
-  // ivmc::address res3;
-  //
-  // // Check that we can write successfully
-  // BOOST_CHECK(odbw.Write(key, in2));
-  // BOOST_CHECK(odbw.Read(key, res3));
-  // BOOST_CHECK_EQUAL(res3.ToString(), in2.ToString());
-  // syslog(LOG_NOTICE, "ivmc: CDBWrapper Test 2");
-  // syslog(LOG_NOTICE, ("ivmc: CDBWrapper Test res3 " + res3.ToString()).c_str());
-  // syslog(LOG_NOTICE, ("ivmc: CDBWrapper Test in2 " + in2.ToString()).c_str());
 
   // cache size calculations
   int64_t nTotalCache = nDefaultDbCache;
@@ -3261,6 +3203,16 @@ bool InitDB()
   syslog(LOG_NOTICE, "ivmc: CBlockTreeDB");
 
   psmartcontracttree = new CBlockTreeDB(nBlockTreeDBCache, false, false, GetDataDir() / "storage" / "index");
+
+  constexpr ivmc::address read_address = 0xc9ea7ed000000000000000000000000000000001_address;
+
+  CDiskTxPos postx;
+  if (psmartcontracttree->ReadTxIndex(read_address, postx)) {
+    syslog(LOG_NOTICE, "ivmc: ReadTxIndex Found");
+  }
+  else {
+    syslog(LOG_NOTICE, "ivmc: ReadTxIndex Not Found");
+  }
 
   return true;
 }
