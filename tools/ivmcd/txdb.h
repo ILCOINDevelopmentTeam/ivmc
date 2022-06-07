@@ -67,9 +67,11 @@ private:
     void operator=(const CBlockTreeDB&);
 public:
     bool ReadTxIndex(const ivmc::address &txid, CDiskTxPos &pos);
+    bool ReadTxIndex(const ivmc::address &txid, std::string &pos);
     bool WriteTxIndex(const std::vector<std::pair<ivmc::address, CDiskBlockPos> > &list);
     bool WriteTxIndex(const std::vector<std::pair<ivmc::address, CDiskTxPos> > &list);
     bool WriteTxIndex(const std::vector<std::pair<std::string, CDiskTxPos> > &list);
+    bool WriteTxIndex(const std::vector<std::pair<ivmc::address, std::string> > &list);
 };
 
 #endif // ILCOIN_TXDB_H

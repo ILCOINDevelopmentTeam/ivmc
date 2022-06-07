@@ -2090,14 +2090,14 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
         size_t _size = ::GetSerializeSize(_out, SER_DISK, CLIENT_VERSION);
         syslog(LOG_NOTICE, ("ivmc: GetSerializeSize " + std::to_string(_size)).c_str());
 
-        int top=10000;
+        int top=1;
         ++nFile;
 
         CDiskBlockPos _pos(nFile, _size);
 
         CDiskTxPos pos(_pos, _size);
         // std::vector<std::pair<ivmc::address, CDiskTxPos> > vPos;
-        std::vector<std::pair<ivmc::address, CDiskTxPos> > vPos;
+        std::vector<std::pair<ivmc::address, std::string> > vPos;
         vPos.reserve(top);
 
         constexpr ivmc::address create_address = 0xc9ea7ed000000000000000000000000000000001_address;
@@ -2113,7 +2113,7 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
         int j=0;
         while (j++<top) {
           ivmc::address in = GetRandHash();
-          vPos.push_back(std::make_pair(in, pos));
+          vPos.push_back(std::make_pair(create_address, _out));
         }
 
         // WriteTxIndex
@@ -2829,6 +2829,10 @@ bool CBlockTreeDB::ReadTxIndex(const ivmc::address &txid, CDiskTxPos &pos) {
     return Read(std::make_pair(DB_TXINDEX, txid), pos);
 }
 
+bool CBlockTreeDB::ReadTxIndex(const ivmc::address &txid, std::string &pos) {
+    return Read(std::make_pair(DB_TXINDEX, txid), pos);
+}
+
 bool CBlockTreeDB::WriteTxIndex(const std::vector<std::pair<ivmc::address, CDiskBlockPos> >&vect) {
     CDBBatch batch(*this);
     for (std::vector<std::pair<ivmc::address,CDiskBlockPos> >::const_iterator it=vect.begin(); it!=vect.end(); it++)
@@ -2846,6 +2850,13 @@ bool CBlockTreeDB::WriteTxIndex(const std::vector<std::pair<ivmc::address, CDisk
 bool CBlockTreeDB::WriteTxIndex(const std::vector<std::pair<std::string, CDiskTxPos> >&vect) {
     CDBBatch batch(*this);
     for (std::vector<std::pair<std::string,CDiskTxPos> >::const_iterator it=vect.begin(); it!=vect.end(); it++)
+        batch.Write(std::make_pair(DB_TXINDEX, it->first), it->second);
+    return WriteBatch(batch);
+}
+
+bool CBlockTreeDB::WriteTxIndex(const std::vector<std::pair<ivmc::address, std::string> >&vect) {
+    CDBBatch batch(*this);
+    for (std::vector<std::pair<ivmc::address, std::string> >::const_iterator it=vect.begin(); it!=vect.end(); it++)
         batch.Write(std::make_pair(DB_TXINDEX, it->first), it->second);
     return WriteBatch(batch);
 }
@@ -3206,9 +3217,9 @@ bool InitDB()
 
   constexpr ivmc::address read_address = 0xc9ea7ed000000000000000000000000000000001_address;
 
-  CDiskTxPos postx;
+  std::string postx;
   if (psmartcontracttree->ReadTxIndex(read_address, postx)) {
-    syslog(LOG_NOTICE, "ivmc: ReadTxIndex Found");
+    syslog(LOG_NOTICE, ("ivmc: ReadTxIndex Found " + postx).c_str());
   }
   else {
     syslog(LOG_NOTICE, "ivmc: ReadTxIndex Not Found");
