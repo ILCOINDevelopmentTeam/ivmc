@@ -224,6 +224,9 @@ std::vector<evhttp_bound_socket *> boundSockets;
 
 CRPCTable tableRPC;
 
+CBlockTreeDB *psmartcontracttree = NULL;
+static CCriticalSection cs_main;
+
 /** Check if a network address is allowed to access the HTTP server */
 static bool ClientAllowed()
 {
@@ -1667,6 +1670,37 @@ void InterruptRPC()
     fRPCRunning = false;
 }
 
+std::atomic<bool> fRequestShutdown(false);
+
+bool StartShutdown()
+{
+    fRequestShutdown = true;
+    return true;
+}
+bool ShutdownRequested()
+{
+    return fRequestShutdown;
+}
+
+bool Shutdown()
+{
+    syslog(LOG_NOTICE, "Shutdown in progress.");
+
+    StopHTTPRPC();
+    StopRPC();
+    InterruptHTTPServer();
+    StopHTTPServer();
+
+    {
+        LOCK(cs_main);
+        delete psmartcontracttree;
+        psmartcontracttree = NULL;
+    }
+
+    syslog(LOG_NOTICE, "Shutdown done.");
+    return true;
+}
+
 void StopRPC()
 {
     syslog(LOG_NOTICE, "rpc: Stopping RPC");
@@ -1993,7 +2027,6 @@ void CHMAC_SHA256::Finalize(unsigned char hash[OUTPUT_SIZE])
 }
 
 // --------------------------------- IVMC
-CBlockTreeDB *psmartcontracttree = NULL;
 
 /// Returns the input str if already valid hex string. Otherwise, interprets the str as a file
 /// name and loads the file content.
@@ -2199,6 +2232,17 @@ UniValue exe_ivmc_rpc(const JSONRPCRequest& jsonRequest)
     return ExecuteIVMC(vm_config_arg, code_arg, input_arg, storage_arg, recipient_arg, sender_arg);
 }
 
+UniValue stop_ivmc_rpc(const JSONRPCRequest& jsonRequest)
+{
+    if (jsonRequest.fHelp || jsonRequest.params.size() != 0)
+        throw std::runtime_error(
+            "stopIVMC ( \"vm_config\", \"code\", \"input\", \"storage\" )\n"
+            "\nStop the IVMC.\n"
+        );
+
+    return StartShutdown();
+}
+
 /**
  * Process named arguments into a vector of positional arguments, based on the
  * passed-in specification for the RPC call's arguments.
@@ -2267,6 +2311,7 @@ UniValue CRPCTable::execute(const JSONRPCRequest &request) const
         rpcfn_type method;
         if(request.strMethod == "help") method = &help_rpc;
         else if(request.strMethod == "executeivmc") method = &exe_ivmc_rpc;
+        else if(request.strMethod == "stopivmc") method = &stop_ivmc_rpc;
 
         if(method){
           // Execute, convert arguments to array if necessary
@@ -2408,6 +2453,14 @@ CRPCTable::CRPCTable()
     _exe_ivmc_cmd.okSafeMode = true;
     _exe_ivmc_cmd.argNames = {"vm_config", "code", "input", "storage"};
     appendCommand("executeivmc", &_exe_ivmc_cmd);
+
+    CRPCCommand _stop_ivmc_cmd;
+    _stop_ivmc_cmd.category = "ivmc";
+    _stop_ivmc_cmd.name = "stopivmc";
+    _stop_ivmc_cmd.actor = &stop_ivmc_rpc;
+    _stop_ivmc_cmd.okSafeMode = true;
+    _stop_ivmc_cmd.argNames = {};
+    appendCommand("stopivmc", &_stop_ivmc_cmd);
 }
 
 static std::map<std::string, std::vector<std::string> > _mapMultiArgs;
@@ -3294,7 +3347,7 @@ int main(int argc, const char** argv)
   close(STDERR_FILENO);
 
   // Daemon-specific intialization should go here
-  const int SLEEP_INTERVAL = 60;
+  const int SLEEP_INTERVAL = 5;
 
   // Init Server
   if (!InitHTTPServer())
@@ -3322,6 +3375,8 @@ int main(int argc, const char** argv)
     do_heartbeat(c);
 
     std::cout.flush();
+
+    if(fRequestShutdown) { Shutdown(); break; } 
 
     // Sleep for a period of time
     sleep(SLEEP_INTERVAL);
