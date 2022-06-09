@@ -2175,6 +2175,22 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
     }
 }
 
+std::string ReadIVMC(std::string sender)
+{
+  auto read_address = ivmc::address{};
+  std::copy(sender.begin(), sender.end(), std::begin(read_address.bytes));
+
+  std::string postx;
+  if (psmartcontracttree->ReadTxIndex(read_address, postx)) {
+    syslog(LOG_NOTICE, ("ivmc: ReadTxIndex Found " + postx).c_str());
+    return postx;
+  }
+  else {
+    syslog(LOG_NOTICE, "ivmc: ReadTxIndex Not Found");
+    return "NOT FOUND";
+  }
+}
+
 // ------------------------------- RPC_CLIENT_P2P_DISABLED
 UniValue help_rpc(const JSONRPCRequest& jsonRequest)
 {
@@ -2241,6 +2257,25 @@ UniValue stop_ivmc_rpc(const JSONRPCRequest& jsonRequest)
         );
 
     return StartShutdown();
+}
+
+UniValue read_ivmc_rpc(const JSONRPCRequest& jsonRequest)
+{
+    if (jsonRequest.fHelp || jsonRequest.params.size() != 1)
+        throw std::runtime_error(
+            "exeIVMC ( \"vm_config\", \"code\", \"input\", \"storage\" )\n"
+            "\nExecute the IVMC passing the parameters code, input and storage.\n"
+            "\nArguments:\n"
+            "1. \"address\"       (string, required) The storage parameter\n"
+            "\nResult:\n"
+            "\"output\"     (string) The execution smart contract result\n"
+        );
+
+    std::string sender_arg;
+    if (jsonRequest.params.size() > 0)
+        sender_arg = jsonRequest.params[0].get_str();
+
+    return ReadIVMC(sender_arg);
 }
 
 /**
@@ -2312,6 +2347,7 @@ UniValue CRPCTable::execute(const JSONRPCRequest &request) const
         if(request.strMethod == "help") method = &help_rpc;
         else if(request.strMethod == "executeivmc") method = &exe_ivmc_rpc;
         else if(request.strMethod == "stopivmc") method = &stop_ivmc_rpc;
+        else if(request.strMethod == "readivmc") method = &read_ivmc_rpc;
 
         if(method){
           // Execute, convert arguments to array if necessary
@@ -2461,6 +2497,14 @@ CRPCTable::CRPCTable()
     _stop_ivmc_cmd.okSafeMode = true;
     _stop_ivmc_cmd.argNames = {};
     appendCommand("stopivmc", &_stop_ivmc_cmd);
+
+    CRPCCommand _read_ivmc_cmd;
+    _read_ivmc_cmd.category = "ivmc";
+    _read_ivmc_cmd.name = "readivmc";
+    _read_ivmc_cmd.actor = &read_ivmc_rpc;
+    _read_ivmc_cmd.okSafeMode = true;
+    _read_ivmc_cmd.argNames = {};
+    appendCommand("readivmc", &_read_ivmc_cmd);
 }
 
 static std::map<std::string, std::vector<std::string> > _mapMultiArgs;
@@ -3376,7 +3420,7 @@ int main(int argc, const char** argv)
 
     std::cout.flush();
 
-    if(fRequestShutdown) { Shutdown(); break; } 
+    if(fRequestShutdown) { Shutdown(); break; }
 
     // Sleep for a period of time
     sleep(SLEEP_INTERVAL);
