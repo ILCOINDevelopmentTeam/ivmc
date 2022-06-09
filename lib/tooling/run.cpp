@@ -350,7 +350,7 @@ int run2(ivmc::VM& vm,
     if (result.status_code == IVMC_SUCCESS || result.status_code == IVMC_REVERT){
       out << "Output:   " << hex({result.output_data, result.output_size}) << "\n";
       syslog(LOG_NOTICE, ("Output: " + hex({result.output_data, result.output_size})).c_str());
-      _out = hex({result.output_data, result.output_size});
+      // _out = hex({result.output_data, result.output_size});
     }
 
     if(host2.account_exists(msg.recipient)){
@@ -395,6 +395,8 @@ int run2(ivmc::VM& vm,
 
       out << "Storage:   " << full_address_storage << "\n";
       syslog(LOG_NOTICE, ("Storage: " + full_address_storage).c_str());
+
+      if(full_address_storage != "") _out = full_address_storage;
 
       // Write Index ordered from vector in index.dat file
 
