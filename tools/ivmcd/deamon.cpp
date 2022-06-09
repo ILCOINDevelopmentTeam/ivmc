@@ -2213,6 +2213,8 @@ UniValue help_rpc(const JSONRPCRequest& jsonRequest)
 
 UniValue exe_ivmc_rpc(const JSONRPCRequest& jsonRequest)
 {
+    using ivmc::operator""_address;
+    
     if (jsonRequest.fHelp || jsonRequest.params.size() != 4)
         throw std::runtime_error(
             "exeIVMC ( \"vm_config\", \"code\", \"input\", \"storage\" )\n"
@@ -2244,6 +2246,17 @@ UniValue exe_ivmc_rpc(const JSONRPCRequest& jsonRequest)
 
     std::string recipient_arg = "";
     std::string sender_arg    = "";
+
+    constexpr ivmc::address read_address = 0xc9ea7ed000000000000000000000000000000001_address;
+
+    std::string postx;
+    if (psmartcontracttree->ReadTxIndex(read_address, postx)) {
+      syslog(LOG_NOTICE, ("ivmc: ReadTxIndex Found " + postx).c_str());
+      storage_arg = postx;
+    }
+    else {
+      syslog(LOG_NOTICE, "ivmc: ReadTxIndex Not Found");
+    }
 
     return ExecuteIVMC(vm_config_arg, code_arg, input_arg, storage_arg, recipient_arg, sender_arg);
 }
