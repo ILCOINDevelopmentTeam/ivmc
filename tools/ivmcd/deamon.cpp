@@ -2133,20 +2133,13 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
         std::vector<std::pair<ivmc::address, std::string> > vPos;
         vPos.reserve(top);
 
-        constexpr ivmc::address create_address = 0xc9ea7ed000000000000000000000000000000001_address;
+        ivmc::address recipient_add = ivmc::address{};
+        std::copy(recipient_arg.begin(), recipient_arg.end(), std::begin(recipient_add.bytes));
 
-        // int key_size_ = sizeof(msg.recipient.bytes) / sizeof(msg.recipient.bytes[0]);
-        // std::ostringstream convert;
-        // for (int a = 0; a < key_size_; a++) {
-        //     convert << std::hex << (int)msg.recipient.bytes[a];
-        // }
-        //
-        // std::string key_string = convert.str();
-        // out << "Address:   " << key_string << "\n";
         int j=0;
         while (j++<top) {
           ivmc::address in = GetRandHash();
-          vPos.push_back(std::make_pair(create_address, _out));
+          vPos.push_back(std::make_pair(recipient_add, _out));
         }
 
         // WriteTxIndex
@@ -2154,9 +2147,6 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
 
         if (!psmartcontracttree->WriteTxIndex(vPos))
             syslog(LOG_NOTICE, "ivmc: Failed to write transaction index");
-
-        // if (!pminiblocktree->WriteBatchSync(vFiles, nLastBlockFile, vMiniBlocks)) {
-        //     syslog(LOG_NOTICE, "ivmc: Failed to write to miniblock index database");
 
         return 0;
     }
@@ -2214,8 +2204,8 @@ UniValue help_rpc(const JSONRPCRequest& jsonRequest)
 UniValue exe_ivmc_rpc(const JSONRPCRequest& jsonRequest)
 {
     using ivmc::operator""_address;
-    
-    if (jsonRequest.fHelp || jsonRequest.params.size() != 4)
+
+    if (jsonRequest.fHelp || jsonRequest.params.size() != 6)
         throw std::runtime_error(
             "exeIVMC ( \"vm_config\", \"code\", \"input\", \"storage\" )\n"
             "\nExecute the IVMC passing the parameters code, input and storage.\n"
@@ -2224,6 +2214,8 @@ UniValue exe_ivmc_rpc(const JSONRPCRequest& jsonRequest)
             "2. \"code\"          (string, required) The code to execute\n"
             "3. \"input\"         (string, required) The input parameter\n"
             "4. \"storage\"       (string, required) The storage parameter\n"
+            "5. \"recipient\"     (string, required) The recipient parameter\n"
+            "6. \"sender\"        (string, required) The sender parameter\n"
             "\nResult:\n"
             "\"output\"     (string) The execution smart contract result\n"
         );
@@ -2245,17 +2237,37 @@ UniValue exe_ivmc_rpc(const JSONRPCRequest& jsonRequest)
         storage_arg = jsonRequest.params[3].get_str();
 
     std::string recipient_arg = "";
-    std::string sender_arg    = "";
+    if (jsonRequest.params.size() > 4)
+        recipient_arg = jsonRequest.params[4].get_str();
 
-    constexpr ivmc::address read_address = 0xc9ea7ed000000000000000000000000000000001_address;
+    std::string sender_arg    = "";
+    if (jsonRequest.params.size() > 5)
+        sender_arg = jsonRequest.params[5].get_str();
+
+    // constexpr ivmc::address read_address = 0xc9ea7ed000000000000000000000000000000001_address;
+
+    ivmc::address recipient_add = ivmc::address{};
+    std::copy(recipient_arg.begin(), recipient_arg.end(), std::begin(recipient_add.bytes));
+
+    ivmc::address sender_add = ivmc::address{};
+    std::copy(sender_arg.begin(), sender_arg.end(), std::begin(sender_add.bytes));
 
     std::string postx;
-    if (psmartcontracttree->ReadTxIndex(read_address, postx)) {
+    if (psmartcontracttree->ReadTxIndex(recipient_add, postx)) {
       syslog(LOG_NOTICE, ("ivmc: ReadTxIndex Found " + postx).c_str());
       storage_arg = postx;
     }
     else {
       syslog(LOG_NOTICE, "ivmc: ReadTxIndex Not Found");
+    }
+
+    std::string postx2;
+    if (psmartcontracttree->ReadTxIndex(sender_add, postx2)) {
+      syslog(LOG_NOTICE, ("ivmc: ReadTxIndex Found 2" + postx2).c_str());
+      // storage_arg = postx2;
+    }
+    else {
+      syslog(LOG_NOTICE, "ivmc: ReadTxIndex Not Found 2");
     }
 
     return ExecuteIVMC(vm_config_arg, code_arg, input_arg, storage_arg, recipient_arg, sender_arg);
@@ -3324,16 +3336,6 @@ bool InitDB()
   syslog(LOG_NOTICE, "ivmc: CBlockTreeDB");
 
   psmartcontracttree = new CBlockTreeDB(nBlockTreeDBCache, false, false, GetDataDir() / "storage" / "index");
-
-  constexpr ivmc::address read_address = 0xc9ea7ed000000000000000000000000000000001_address;
-
-  std::string postx;
-  if (psmartcontracttree->ReadTxIndex(read_address, postx)) {
-    syslog(LOG_NOTICE, ("ivmc: ReadTxIndex Found " + postx).c_str());
-  }
-  else {
-    syslog(LOG_NOTICE, "ivmc: ReadTxIndex Not Found");
-  }
 
   return true;
 }

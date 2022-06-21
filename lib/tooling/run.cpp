@@ -279,8 +279,8 @@ int run2(ivmc::VM& vm,
     msg.gas = gas;
     msg.input_data = input.data();
     msg.input_size = input.size();
-    msg.recipient = create_address;
-    msg.sender = create_address;
+    msg.recipient = recipient_add;
+    msg.sender = sender_add;
 
     syslog(LOG_NOTICE, ("Code: " + code_hex).c_str());
     syslog(LOG_NOTICE, ("Input: " + input_hex).c_str());
