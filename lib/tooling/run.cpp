@@ -259,8 +259,8 @@ int run2(ivmc::VM& vm,
         const std::string& code_hex,
         const std::string& input_hex,
         const std::string& storage_hex,
-        const std::string& recipient,
-        const std::string& sender,
+        const std::string& recipient_hex,
+        const std::string& sender_hex,
         std::ostream& out,
         std::string& _out)
 {
@@ -268,6 +268,8 @@ int run2(ivmc::VM& vm,
 
     const bytes code = ivmc::from_hex(code_hex);
     const bytes input = ivmc::from_hex(input_hex);
+    const bytes recipient = ivmc::from_hex(recipient_hex);
+    const bytes sender = ivmc::from_hex(sender_hex);
 
     auto recipient_add = address{};
     std::copy(recipient.begin(), recipient.end(), std::begin(recipient_add.bytes));

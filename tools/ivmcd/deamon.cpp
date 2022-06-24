@@ -2075,6 +2075,7 @@ bool InitIVMC()
 int nFile = 0;
 int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string input_arg, std::string storage_arg, std::string recipient_arg, std::string sender_arg)
 {
+    syslog(LOG_NOTICE, "ivmc: ExecuteIVMC");
     using namespace ivmc;
 
     static HexValidator Hex;
@@ -2108,6 +2109,8 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
         const auto code_hex = load_hex(code_arg);
         const auto input_hex = load_hex(input_arg);
         const auto storage_hex = load_hex(storage_arg);
+        const auto recipient_hex = load_hex(recipient_arg);
+        const auto sender_hex = load_hex(sender_arg);
         std::string _out = "";
 
         // If code_hex or input_hex or storage_hex is not valid hex string an exception is thrown.
@@ -2133,8 +2136,10 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
         std::vector<std::pair<ivmc::address, std::string> > vPos;
         vPos.reserve(top);
 
-        ivmc::address recipient_add = ivmc::address{};
-        std::copy(recipient_arg.begin(), recipient_arg.end(), std::begin(recipient_add.bytes));
+        const bytes recipient = ivmc::from_hex(recipient_hex);
+
+        ivmc::address recipient_add = address{};
+        std::copy(recipient.begin(), recipient.end(), std::begin(recipient_add.bytes));
 
         int j=0;
         while (j++<top) {
@@ -2165,8 +2170,11 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
     }
 }
 
-std::string ReadIVMC(std::string sender)
+std::string ReadIVMC(std::string sender_arg)
 {
+  const auto sender_hex = load_hex(sender_arg);
+  const ivmc::bytes sender = ivmc::from_hex(sender_hex);
+
   auto read_address = ivmc::address{};
   std::copy(sender.begin(), sender.end(), std::begin(read_address.bytes));
 
@@ -2236,21 +2244,26 @@ UniValue exe_ivmc_rpc(const JSONRPCRequest& jsonRequest)
     if (jsonRequest.params.size() > 3)
         storage_arg = jsonRequest.params[3].get_str();
 
-    std::string recipient_arg = "";
+    std::string recipient_arg;
     if (jsonRequest.params.size() > 4)
         recipient_arg = jsonRequest.params[4].get_str();
 
-    std::string sender_arg    = "";
+    std::string sender_arg;
     if (jsonRequest.params.size() > 5)
         sender_arg = jsonRequest.params[5].get_str();
 
     // constexpr ivmc::address read_address = 0xc9ea7ed000000000000000000000000000000001_address;
+    const auto recipient_hex = load_hex(recipient_arg);
+    const auto sender_hex = load_hex(sender_arg);
+
+    const ivmc::bytes recipient = ivmc::from_hex(recipient_hex);
+    const ivmc::bytes sender = ivmc::from_hex(sender_hex);
 
     ivmc::address recipient_add = ivmc::address{};
-    std::copy(recipient_arg.begin(), recipient_arg.end(), std::begin(recipient_add.bytes));
+    std::copy(recipient.begin(), recipient.end(), std::begin(recipient_add.bytes));
 
     ivmc::address sender_add = ivmc::address{};
-    std::copy(sender_arg.begin(), sender_arg.end(), std::begin(sender_add.bytes));
+    std::copy(sender.begin(), sender.end(), std::begin(sender_add.bytes));
 
     std::string postx;
     if (psmartcontracttree->ReadTxIndex(recipient_add, postx)) {
@@ -2269,6 +2282,22 @@ UniValue exe_ivmc_rpc(const JSONRPCRequest& jsonRequest)
     else {
       syslog(LOG_NOTICE, "ivmc: ReadTxIndex Not Found 2");
     }
+
+    syslog(LOG_NOTICE, ("ivmc: vm_config_arg: " + vm_config_arg).c_str());
+    syslog(LOG_NOTICE, ("ivmc: code_arg: " + code_arg).c_str());
+    syslog(LOG_NOTICE, ("ivmc: input_arg: " + input_arg).c_str());
+    syslog(LOG_NOTICE, ("ivmc: storage_arg: " + storage_arg).c_str());
+    syslog(LOG_NOTICE, ("ivmc: recipient_arg: " + recipient_arg).c_str());
+    syslog(LOG_NOTICE, ("ivmc: sender_arg: " + sender_arg).c_str());
+
+    syslog(LOG_NOTICE, "ivmc: 3");
+
+    syslog(LOG_NOTICE, ("ivmc: vm_config_arg: " + vm_config_arg).c_str());
+    syslog(LOG_NOTICE, ("ivmc: code_arg: " + code_arg).c_str());
+    syslog(LOG_NOTICE, ("ivmc: input_arg: " + input_arg).c_str());
+    syslog(LOG_NOTICE, ("ivmc: storage_arg: " + storage_arg).c_str());
+    syslog(LOG_NOTICE, ("ivmc: recipient_arg: " + recipient_arg).c_str());
+    syslog(LOG_NOTICE, ("ivmc: sender_arg: " + sender_arg).c_str());
 
     return ExecuteIVMC(vm_config_arg, code_arg, input_arg, storage_arg, recipient_arg, sender_arg);
 }
