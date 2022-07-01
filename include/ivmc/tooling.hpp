@@ -30,5 +30,7 @@ int run2(ivmc::VM& vm,
         const std::string& recipient,
         const std::string& sender,
         std::ostream& out,
-        std::string& _out);
+        std::string& _out,
+        std::string& _storage);
+        
 }  // namespace ivmc::tooling

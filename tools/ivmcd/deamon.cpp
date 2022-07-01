@@ -2073,7 +2073,7 @@ bool InitIVMC()
 }
 
 int nFile = 0;
-int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string input_arg, std::string storage_arg, std::string recipient_arg, std::string sender_arg)
+int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string input_arg, std::string storage_arg, std::string recipient_arg, std::string sender_arg, std::string& out)
 {
     syslog(LOG_NOTICE, "ivmc: ExecuteIVMC");
     using namespace ivmc;
@@ -2112,18 +2112,21 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
         const auto recipient_hex = load_hex(recipient_arg);
         const auto sender_hex = load_hex(sender_arg);
         std::string _out = "";
+        std::string _storage = "";
 
         // If code_hex or input_hex or storage_hex is not valid hex string an exception is thrown.
-        tooling::run2(vm, rev, gas, code_hex, input_hex, storage_hex, recipient_arg, sender_arg, std::cout, _out);
+        tooling::run2(vm, rev, gas, code_hex, input_hex, storage_hex, recipient_arg, sender_arg, std::cout, _out, _storage);
 
         std::stringstream ss;
         ss << std::cout.rdbuf();
         std::string myString = ss.str();
+        out = _out;
 
         syslog(LOG_NOTICE, ("ivmc: run2 out " + _out).c_str());
+        syslog(LOG_NOTICE, ("ivmc: run2 storage " + _storage).c_str());
         syslog(LOG_NOTICE, "ivmc: End execution");
 
-        size_t _size = ::GetSerializeSize(_out, SER_DISK, CLIENT_VERSION);
+        size_t _size = ::GetSerializeSize(_storage, SER_DISK, CLIENT_VERSION);
         syslog(LOG_NOTICE, ("ivmc: GetSerializeSize " + std::to_string(_size)).c_str());
 
         int top=1;
@@ -2144,7 +2147,7 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
         int j=0;
         while (j++<top) {
           ivmc::address in = GetRandHash();
-          vPos.push_back(std::make_pair(recipient_add, _out));
+          vPos.push_back(std::make_pair(recipient_add, _storage));
         }
 
         // WriteTxIndex
@@ -2153,7 +2156,7 @@ int ExecuteIVMC(std::string vm_config_arg, std::string code_arg, std::string inp
         if (!psmartcontracttree->WriteTxIndex(vPos))
             syslog(LOG_NOTICE, "ivmc: Failed to write transaction index");
 
-        return 0;
+        return 1;
     }
     catch (const CLI::ParseError& e)
     {
@@ -2299,7 +2302,16 @@ UniValue exe_ivmc_rpc(const JSONRPCRequest& jsonRequest)
     syslog(LOG_NOTICE, ("ivmc: recipient_arg: " + recipient_arg).c_str());
     syslog(LOG_NOTICE, ("ivmc: sender_arg: " + sender_arg).c_str());
 
-    return ExecuteIVMC(vm_config_arg, code_arg, input_arg, storage_arg, recipient_arg, sender_arg);
+    std::string out = "";
+    int _result = ExecuteIVMC(vm_config_arg, code_arg, input_arg, storage_arg, recipient_arg, sender_arg, out);
+
+    syslog(LOG_NOTICE, ("ivmc: run3 out " + out).c_str());
+
+    UniValue rv(UniValue::VOBJ);
+    rv.push_back(Pair("result", _result));
+    rv.push_back(Pair("out", out));
+
+    return rv;
 }
 
 UniValue stop_ivmc_rpc(const JSONRPCRequest& jsonRequest)

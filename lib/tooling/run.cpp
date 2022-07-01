@@ -262,7 +262,8 @@ int run2(ivmc::VM& vm,
         const std::string& recipient_hex,
         const std::string& sender_hex,
         std::ostream& out,
-        std::string& _out)
+        std::string& _out,
+        std::string& _storage)
 {
     out << "Executing on " << rev << " with " << gas << " gas limit\n";
 
@@ -351,8 +352,8 @@ int run2(ivmc::VM& vm,
 
     if (result.status_code == IVMC_SUCCESS || result.status_code == IVMC_REVERT){
       out << "Output:   " << hex({result.output_data, result.output_size}) << "\n";
-      syslog(LOG_NOTICE, ("Output: " + hex({result.output_data, result.output_size})).c_str());
-      // _out = hex({result.output_data, result.output_size});
+      syslog(LOG_NOTICE, ("Out: " + hex({result.output_data, result.output_size})).c_str());
+      _out = hex({result.output_data, result.output_size});
     }
 
     if(host2.account_exists(msg.recipient)){
@@ -398,7 +399,7 @@ int run2(ivmc::VM& vm,
       out << "Storage:   " << full_address_storage << "\n";
       syslog(LOG_NOTICE, ("Storage: " + full_address_storage).c_str());
 
-      if(full_address_storage != "") _out = full_address_storage;
+      if(full_address_storage != "") _storage = full_address_storage;
 
       // Write Index ordered from vector in index.dat file
 
